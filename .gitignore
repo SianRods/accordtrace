@@ -1,0 +1,82 @@
+# Existing local project notes
+/documentation/
+
+# Python environments, tooling, and caches
+/.venv/
+/.tools/
+/.cache/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
+
+# Downloaded dataset and Hugging Face cache (keep data/download_maud.py tracked)
+/data/maud/
+/data/.cache/
+/data/raw/
+/data/processed/
+/data/indexes/
+/data/exports/
+/data/evaluations/
+/data/volumes/
+
+# Frontend dependencies and generated builds/reports
+node_modules/
+.next/
+.vite/
+.turbo/
+build/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Local logs, temporary files, and runtime artifacts
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+/logs/
+/tmp/
+/temp/
+/artifacts/
+
+# Local infrastructure state and overrides
+/.docker/
+compose.override.yml
+compose.override.yaml
+docker-compose.override.yml
+docker-compose.override.yaml
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
