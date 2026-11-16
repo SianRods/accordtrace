@@ -1,6 +1,7 @@
 # Existing local project notes
-/documentation/
-
+/backend/*/*.md
+/backend/*.md
+/documentation
 # Python environments, tooling, and caches
 /.venv/
 /.tools/
@@ -32,6 +33,7 @@ junit.xml
 /data/exports/
 /data/evaluations/
 /data/volumes/
+/backend/.runtime/
 
 # Frontend dependencies and generated builds/reports
 node_modules/
@@ -80,3 +82,6 @@ docker-compose.override.yaml
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Backend plans, instructions, runbooks, and handoffs are project deliverables.
+/backend/**/*.md

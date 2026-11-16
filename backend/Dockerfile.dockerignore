@@ -1,0 +1,12 @@
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!backend/
+!backend/**
+backend/.runtime/
+backend/.env
+backend/.env.*
+!backend/.env.example
+**/__pycache__/
+**/.pytest_cache/

@@ -5,9 +5,37 @@ description = "Evidence-backed M&A agreement review with multiagent GraphRAG and
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.14,<2",
+    "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
     "huggingface-hub>=1.33,<2",
+    "neo4j>=5.26,<6",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.7,<3",
+    "pyyaml>=6,<7",
+    "sqlalchemy>=2.0,<2.1",
+    "uvicorn>=0.34,<1",
 ]
 
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+accordtrace-backend = "accordtrace_backend.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/accordtrace_backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "--basetemp=backend/.runtime/pytest"
+markers = ["integration: requires PostgreSQL and Neo4j test services"]
+
 [tool.uv]
-package = false
 cache-dir = ".cache/uv"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]

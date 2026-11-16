@@ -1,0 +1,69 @@
+name: accordtrace-phase1
+x-app: &app
+  image: accordtrace-backend:phase1
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+  env_file: .env
+  volumes:
+    - ../data/maud/MAUD_v1/contracts:/sources:ro
+    - ./.runtime:/opt/app/backend/.runtime
+  depends_on:
+    postgres: {condition: service_healthy}
+    neo4j: {condition: service_healthy}
+    qdrant: {condition: service_healthy}
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebca
+    environment:
+      POSTGRES_USER: accordtrace
+      POSTGRES_DB: accordtrace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set backend/.env}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U accordtrace -d accordtrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  neo4j:
+    image: neo4j:5.26-community@sha256:f1e52d4dc6da122468c4a3c1050a4f5e117f6d3268625237c34d49166f0d6082
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set backend/.env}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes: [neo4j_data:/data]
+    healthcheck:
+      test: [CMD-SHELL, "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 20s
+  qdrant:
+    image: qdrant/qdrant:v1.16.0@sha256:1005201498cf927d835383d0f918b17d8c9da7db58550f169f694455e42d78f4
+    volumes: [qdrant_data:/qdrant/storage]
+    healthcheck:
+      test: [CMD-SHELL, "bash -c ': > /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  migrate:
+    <<: *app
+    profiles: [tools]
+    command: [alembic, -c, backend/alembic.ini, upgrade, head]
+  worker:
+    <<: *app
+    profiles: [tools]
+    command: [accordtrace-backend, worker, --once]
+volumes:
+  postgres_data:
+  neo4j_data:
+  qdrant_data:
