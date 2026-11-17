@@ -1,6 +1,6 @@
 name: accordtrace-phase1
 x-app: &app
-  image: accordtrace-backend:phase1
+  image: accordtrace-backend:phase2
   build:
     context: ..
     dockerfile: backend/Dockerfile

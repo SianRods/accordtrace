@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 import httpx
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 from ..core import DomainError, PARSER_VERSION, Settings, digest
 from ..graph import driver
 from ..ingestion import enqueue
-from ..storage import Document, Job, Snapshot, Span, engine
+from ..storage import ActiveSnapshot, Chunk, Document, Job, LogicalDocument, Snapshot, Span, engine
+from ..retrieval import SearchPacket,SearchRequest, search, evidence as chunk_evidence
+from ..indexing import activate, enqueue_index
 
 LOG=logging.getLogger('accordtrace.requests')
 LOG.setLevel(logging.INFO)
@@ -26,7 +28,6 @@ if not LOG.handlers:
     handler.setFormatter(logging.Formatter('%(message)s'))
     LOG.addHandler(handler)
     LOG.propagate=False
-ALLOWED=tuple(f'contract_{i}' for i in range(6))
 
 
 class IngestionRequest(BaseModel):
@@ -35,7 +36,7 @@ class IngestionRequest(BaseModel):
 
 
 def job_view(job):
-    return dict(id=job.id,snapshot_id=job.snapshot_id,status=job.status,stage=job.stage,
+    return dict(id=job.id,snapshot_id=job.snapshot_id,kind=job.kind,status=job.status,stage=job.stage,
                 attempts=job.attempts,error_code=job.error_code)
 
 
@@ -48,7 +49,7 @@ def create_app(settings: Settings|None=None):
         yield
         db_engine.dispose()
 
-    app=FastAPI(title='AccordTrace Phase 1',version='0.1.0',lifespan=lifespan)
+    app=FastAPI(title='AccordTrace evidence backend',version='0.2.0',lifespan=lifespan)
     app.state.settings=settings
     app.state.engine=db_engine
 
@@ -88,10 +89,16 @@ def create_app(settings: Settings|None=None):
     def ready():
         checks={}
         graph_ready=False
+        search_ready=False
+        active_id=None
         try:
             with Session(db_engine) as db:
                 db.execute(text('SELECT 1'))
-                graph_ready=bool(db.scalar(select(func.count()).select_from(Snapshot).where(Snapshot.status=='graph_ready')))
+                graph_ready=bool(db.scalar(select(func.count()).select_from(Snapshot).where(Snapshot.status.in_(('graph_ready','search_ready')))))
+                pointer=db.get(ActiveSnapshot,1)
+                active_id=pointer.snapshot_id if pointer else None
+                active=db.get(Snapshot,active_id) if active_id else None
+                search_ready=bool(active and active.search_ready)
             checks['postgres']='ready'
         except Exception: checks['postgres']='unavailable'
         try:
@@ -106,19 +113,22 @@ def create_app(settings: Settings|None=None):
         except Exception: checks['qdrant']='unavailable'
         ok=all(v=='ready' for v in checks.values())
         return JSONResponse(status_code=200 if ok else 503,content=dict(
-            status='ready' if ok else 'unavailable',dependencies=checks,graph_ready=graph_ready,search_ready=False))
+            status='ready' if ok else 'unavailable',dependencies=checks,graph_ready=graph_ready,
+            search_ready=search_ready and ok,active_snapshot_id=active_id))
 
     protection=[Depends(auth)]
 
     @app.get('/api/v1/documents',dependencies=protection)
     def documents(db: Session=Depends(session),offset: int=Query(0,ge=0),limit: int=Query(20,ge=1,le=100)):
-        docs=db.scalars(select(Document).where(Document.agreement_id.in_(ALLOWED)).order_by(Document.agreement_id,Document.id).offset(offset).limit(limit))
+        docs=db.scalars(select(Document).join(LogicalDocument,Document.logical_document_id==LogicalDocument.id)
+            .where(LogicalDocument.approved.is_(True)).order_by(Document.agreement_id,Document.id).offset(offset).limit(limit))
         return {'items':[dict(id=d.id,agreement_id=d.agreement_id,raw_hash=d.raw_hash,text_hash=d.text_hash,
                     byte_size=d.byte_size,source_revision=d.source_revision) for d in docs],'offset':offset,'limit':limit}
 
     def document(db,version_id):
         doc=db.get(Document,str(version_id))
-        if doc is None or doc.agreement_id not in ALLOWED:
+        logical=db.get(LogicalDocument,doc.logical_document_id) if doc and doc.logical_document_id else None
+        if doc is None or logical is None or not logical.approved:
             raise DomainError('document_not_found',404)
         return doc
 
@@ -151,5 +161,53 @@ def create_app(settings: Settings|None=None):
         job=db.get(Job,str(job_id))
         if job is None: raise DomainError('job_not_found',404)
         return job_view(job)
+
+    @app.post('/api/v1/search',dependencies=protection,response_model=SearchPacket)
+    def retrieve(body: SearchRequest):return search(settings,db_engine,body)
+
+    @app.get('/api/v1/chunks/{chunk_id}/evidence',dependencies=protection)
+    def child_evidence(chunk_id:uuid.UUID,db:Session=Depends(session)):
+        row=db.get(Chunk,str(chunk_id))
+        if row is None:raise DomainError('chunk_not_found',404)
+        return chunk_evidence(db,row)
+
+    def snapshot_view(db,row):
+        active=db.get(ActiveSnapshot,1)
+        return dict(id=row.id,status=row.status,search_ready=row.search_ready,base_snapshot_id=row.base_snapshot_id,
+            fingerprint=row.fingerprint,configuration=row.configuration,report=row.report,
+            active=bool(active and active.snapshot_id==row.id),generation=active.generation if active else 0)
+
+    @app.get('/api/v1/snapshots',dependencies=protection)
+    def snapshots(db:Session=Depends(session),offset:int=Query(0,ge=0),limit:int=Query(20,ge=1,le=100)):
+        rows=db.scalars(select(Snapshot).order_by(Snapshot.created_at,Snapshot.id).offset(offset).limit(limit))
+        active=db.get(ActiveSnapshot,1)
+        return dict(items=[snapshot_view(db,row) for row in rows],offset=offset,limit=limit,
+                    active_snapshot_id=active.snapshot_id if active else None,generation=active.generation if active else 0)
+
+    @app.get('/api/v1/snapshots/{snapshot_id}',dependencies=protection)
+    def snapshot_status(snapshot_id:uuid.UUID,db:Session=Depends(session)):
+        row=db.get(Snapshot,str(snapshot_id))
+        if row is None:raise DomainError('snapshot_not_found',404)
+        return snapshot_view(db,row)
+
+    class BuildRequest(BaseModel):
+        model_config=ConfigDict(extra='forbid')
+        base_snapshot_id:uuid.UUID
+        manifest_id:str|None=None
+
+    @app.post('/api/v1/admin/index-builds',status_code=202,dependencies=protection)
+    def build(body:BuildRequest,idempotency_key:Annotated[str,Header(min_length=1,max_length=160)]):
+        if body.manifest_id:
+            from ..updates import enqueue_manifest
+            return job_view(enqueue_manifest(settings,db_engine,idempotency_key,body.manifest_id,str(body.base_snapshot_id)))
+        return job_view(enqueue_index(settings,db_engine,idempotency_key,str(body.base_snapshot_id)))
+
+    class ActivateRequest(BaseModel):
+        model_config=ConfigDict(extra='forbid')
+        expected_generation:int=Field(ge=0)
+
+    @app.post('/api/v1/admin/snapshots/{snapshot_id}/activate',dependencies=protection)
+    def publish(snapshot_id:uuid.UUID,body:ActivateRequest):
+        return activate(settings,db_engine,str(snapshot_id),body.expected_generation)
 
     return app

@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 from . import graph
 from .core import DomainError, PARSER_VERSION, Settings, digest, identity
 from .parsing import parse
-from .storage import (Artifact, Document, Issue, Job, Membership, Reference, Snapshot,
+from .storage import (Artifact, Document, Issue, Job, LogicalDocument, Membership, Reference, Snapshot,
                       Span, Term, TermUse, engine, utcnow)
 
 
@@ -138,9 +138,10 @@ def process(settings: Settings, db_engine, claimed):
                 issues=len(parsed.issues),coverage=parsed.coverage)
             with Session(db_engine) as db,db.begin():
                 job=owned(db,job_id,token,settings.lease_seconds)
+                db.execute(insert(LogicalDocument).values(id=source['name'],agreement_id=source['name'],role='agreement',approved=True).on_conflict_do_nothing())
                 db.merge(Document(id=vid,agreement_id=source['name'],raw_hash=source['sha'],
                     text_hash=digest(source['text'].encode()),text=source['text'],source_uri='sources/'+raw_path.name,
-                    source_revision=source['revision'],byte_size=len(source['raw'])))
+                    source_revision=source['revision'],byte_size=len(source['raw']),logical_document_id=source['name']))
                 db.flush()
                 db.merge(Membership(snapshot_id=sid,document_id=vid))
                 def bulk(model,rows):
@@ -194,7 +195,11 @@ def work(settings: Settings, once=True):
         while not stop.is_set():
             claimed=claim(db_engine,settings.lease_seconds)
             if claimed:
-                process(settings,db_engine,claimed)
+                with Session(db_engine) as db:kind=db.get(Job,claimed[0]).kind
+                if kind=='index':
+                    from .indexing import process_index
+                    process_index(settings,db_engine,claimed)
+                else:process(settings,db_engine,claimed)
             if once: return bool(claimed)
             stop.wait(2)
     finally:

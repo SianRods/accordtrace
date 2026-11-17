@@ -26,8 +26,9 @@ class Document(Base):
     source_uri: Mapped[str] = mapped_column(Text)
     source_revision: Mapped[str] = mapped_column(String(80))
     byte_size: Mapped[int] = mapped_column(Integer)
+    logical_document_id: Mapped[str] = mapped_column(ForeignKey('logical_document.id'),nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint('agreement_id','raw_hash'),)
+    __table_args__ = (UniqueConstraint('logical_document_id','raw_hash',name='uq_document_logical_raw'),)
 
 
 class Snapshot(Base):
@@ -39,6 +40,8 @@ class Snapshot(Base):
     search_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     report: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    configuration: Mapped[dict] = mapped_column(JSON,default=dict)
+    base_snapshot_id: Mapped[str|None] = mapped_column(ForeignKey('corpus_snapshot.id'),nullable=True)
 
 
 class Membership(Base):
@@ -113,6 +116,76 @@ class Job(Base):
     lease_until: Mapped[datetime|None] = mapped_column(DateTime(timezone=True),nullable=True)
     error_code: Mapped[str|None] = mapped_column(String(100),nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
+    kind: Mapped[str] = mapped_column(String(30),default='ingestion')
+    configuration: Mapped[dict] = mapped_column(JSON,default=dict)
+
+
+class LogicalDocument(Base):
+    __tablename__ = 'logical_document'
+    id: Mapped[str] = mapped_column(String(80),primary_key=True)
+    agreement_id: Mapped[str] = mapped_column(String(80),index=True)
+    role: Mapped[str] = mapped_column(String(30))
+    parent_id: Mapped[str|None] = mapped_column(ForeignKey('logical_document.id'),nullable=True)
+    approved: Mapped[bool] = mapped_column(Boolean,default=True)
+
+
+class Chunk(Base):
+    __tablename__ = 'child_chunk'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey('document_version.id'),index=True)
+    parent_id: Mapped[str] = mapped_column(ForeignKey('evidence_span.id'),index=True)
+    start: Mapped[int] = mapped_column(Integer)
+    end: Mapped[int] = mapped_column(Integer)
+    text_hash: Mapped[str] = mapped_column(String(64))
+    chunker_hash: Mapped[str] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    embedding_input: Mapped[str] = mapped_column(Text)
+    tokens: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (CheckConstraint('start >= 0 AND "end" > start',name='chunk_bounds'),)
+
+
+class ChunkMembership(Base):
+    __tablename__ = 'snapshot_chunk'
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey('corpus_snapshot.id'),primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(ForeignKey('child_chunk.id'),primary_key=True)
+
+
+class EmbeddingProfile(Base):
+    __tablename__ = 'embedding_profile'
+    id: Mapped[str] = mapped_column(String(64),primary_key=True)
+    configuration: Mapped[dict] = mapped_column(JSON)
+
+
+class EmbeddingCache(Base):
+    __tablename__ = 'embedding_cache'
+    id: Mapped[str] = mapped_column(String(64),primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey('embedding_profile.id'))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    task: Mapped[str] = mapped_column(String(40))
+    vector: Mapped[list] = mapped_column(JSON)
+
+
+class ActiveSnapshot(Base):
+    __tablename__ = 'active_snapshot'
+    id: Mapped[int] = mapped_column(Integer,primary_key=True)
+    snapshot_id: Mapped[str|None] = mapped_column(ForeignKey('corpus_snapshot.id'),nullable=True)
+    generation: Mapped[int] = mapped_column(Integer,default=0)
+    __table_args__ = (CheckConstraint('id = 1',name='singleton_active'),)
+
+
+class Activation(Base):
+    __tablename__ = 'snapshot_activation'
+    generation: Mapped[int] = mapped_column(Integer,primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey('corpus_snapshot.id'))
+    previous_id: Mapped[str|None] = mapped_column(ForeignKey('corpus_snapshot.id'),nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=utcnow)
+
+
+class Resolution(Base):
+    __tablename__ = 'snapshot_resolution'
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey('corpus_snapshot.id'),primary_key=True)
+    reference_id: Mapped[str] = mapped_column(ForeignKey('reference_mention.id'),primary_key=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey('evidence_span.id'))
 
 
 class Artifact(Base):

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     qdrant_url: str = 'http://localhost:6333'
     api_token: SecretStr = SecretStr('')
     lease_seconds: int = Field(120, ge=30, le=3600)
+    gemini_api_key: SecretStr = SecretStr('')
+    gemini_free_tier_confirmed: bool = False
+    embedding_timeout_seconds: int = Field(20, ge=1, le=60)
+    embedding_requests_per_minute: int = Field(5, ge=1)
+    approved_manifests: tuple[str, ...] = ()
+    approved_manifest_dir: Path|None = None
 
     @property
     def runtime(self) -> Path:

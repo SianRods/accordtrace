@@ -1,0 +1,15 @@
+# Explicit development overlay; base Compose always runs packaged source.
+services:
+  api:
+    volumes:
+      - ./src:/opt/app/backend/src:ro
+      - ./tests:/opt/app/backend/tests:ro
+      - ./scripts:/opt/app/backend/scripts:ro
+      - ./migrations:/opt/app/backend/migrations:ro
+  worker:
+    volumes:
+      - ./src:/opt/app/backend/src:ro
+  migrate:
+    volumes:
+      - ./src:/opt/app/backend/src:ro
+      - ./migrations:/opt/app/backend/migrations:ro

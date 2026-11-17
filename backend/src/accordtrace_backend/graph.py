@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .core import Settings, identity
-from .storage import Document, Membership, Span, Term, TermUse, Reference
+from .storage import Document, Membership, Span, Term, TermUse, Reference, Resolution
 
 LABELS = ('DocumentVersion','Section','Clause','DefinedTerm','UnresolvedReference')
 EDGES = ('CONTAINS','DEFINES','USES_TERM','REFERENCES','HAS_UNRESOLVED_REFERENCE')
@@ -22,6 +22,7 @@ def records(db: Session, snapshot_id: str, parser_version: str):
     docs=db.scalars(select(Document).join(Membership, Membership.document_id==Document.id)
                     .where(Membership.snapshot_id==snapshot_id)).all()
     nodes, edges=[],[]
+    resolutions={r.reference_id:r.target_id for r in db.scalars(select(Resolution).where(Resolution.snapshot_id==snapshot_id))}
 
     def node(label, key, **props):
         gid=identity(snapshot_id,key)
@@ -47,12 +48,12 @@ def records(db: Session, snapshot_id: str, parser_version: str):
         for use in db.scalars(select(TermUse).where(TermUse.source_id.in_(span_ids))):
             edge('USES_TERM',use.id,use.source_id,use.term_id,source_span_id=use.source_id,start=use.start,end=use.end)
         for ref in db.scalars(select(Reference).where(Reference.source_id.in_(span_ids))):
-            if ref.status=='verified':
-                edge('REFERENCES',ref.id,ref.source_id,ref.target_id,source_span_id=ref.source_id,
+            if ref.status=='verified' or ref.id in resolutions:
+                edge('REFERENCES',ref.id,ref.source_id,resolutions.get(ref.id,ref.target_id),source_span_id=ref.source_id,
                      literal_reference=ref.literal,start=ref.start,end=ref.end)
             else:
                 node('UnresolvedReference',ref.id,document_version_id=doc.id,literal_reference=ref.literal,
-                     resolution_status=ref.status,target_label=ref.target_label)
+                     resolution_status=ref.status,target_label=ref.target_label,start=ref.start,end=ref.end)
                 edge('HAS_UNRESOLVED_REFERENCE',ref.id,ref.source_id,ref.id)
     return nodes,edges
 
@@ -61,6 +62,8 @@ def project(settings: Settings, snapshot_id, nodes, edges, heartbeat):
     counts=Counter()
     with driver(settings) as conn, conn.session() as session:
         session.run('CREATE CONSTRAINT kb_graph_id IF NOT EXISTS FOR (n:KBNode) REQUIRE n.graph_id IS UNIQUE').consume()
+        session.run('CREATE INDEX kb_snapshot IF NOT EXISTS FOR (n:KBNode) ON (n.snapshot_id)').consume()
+        session.run('CREATE INDEX kb_snapshot_document IF NOT EXISTS FOR (n:KBNode) ON (n.snapshot_id,n.document_version_id)').consume()
         for label in LABELS:
             rows=[{k:v for k,v in n.items() if k!='label'} for n in nodes if n['label']==label]
             for start in range(0,len(rows),250):
