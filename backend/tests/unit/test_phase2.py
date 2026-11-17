@@ -3,11 +3,11 @@ from types import SimpleNamespace as NS
 import pytest
 from tokenizers import Tokenizer,models,pre_tokenizers,trainers
 
-from accordtrace_backend.chunking import chunks,fingerprint,partitions
-from accordtrace_backend.core import DomainError,Settings,digest
-from accordtrace_backend.embedding import Gemini,validate_vector
-from accordtrace_backend.retrieval import SearchRequest,rrf
-from accordtrace_backend.updates import read_manifest
+from accordtrace_backend.indexing.chunking import chunks, fingerprint, partitions
+from accordtrace_backend.common.core import DomainError, Settings, digest
+from accordtrace_backend.indexing.embedding import validate_vector
+from accordtrace_backend.retrieval.search import SearchRequest, rrf
+from accordtrace_backend.indexing.updates import read_manifest
 
 
 def tokenizer():
@@ -54,36 +54,8 @@ def test_normalization_fusion_and_profile_fingerprint():
 
 
 def test_credentials_scope_and_manifest_guards():
-    with pytest.raises(DomainError,match='gemini_credentials_missing'):
-        Gemini(Settings(gemini_api_key='')).embed(['test'],'RETRIEVAL_QUERY')
-    with pytest.raises(DomainError,match='gemini_free_tier_not_confirmed'):
-        Gemini(Settings(gemini_api_key='fake',gemini_free_tier_confirmed=False)).embed(['test'],'RETRIEVAL_QUERY')
     with pytest.raises(DomainError,match='manifest_not_approved'):read_manifest(Settings(),'../private')
     for body in (dict(query='q',agreement_ids=[]),dict(mode='exact',agreement_ids=['contract_0']),
                  dict(query='q',agreement_ids=['contract_0','contract_0']),
                  dict(query='\U0001f600'*500,agreement_ids=['contract_0'])):
         with pytest.raises(ValueError):SearchRequest(**body)
-
-
-def test_gemini_retry_after_and_standard_api(monkeypatch):
-    import httpx
-    from google import genai
-    from google.genai import errors
-    calls=[];waits=[]
-    class Client:
-        def __init__(self,**kwargs):self.models=self
-        def __enter__(self):return self
-        def __exit__(self,*args):pass
-        def embed_content(self,**kwargs):
-            calls.append(kwargs)
-            if len(calls)==1:
-                raise errors.APIError(429,{'error':{'message':'test quota'}},
-                    response=httpx.Response(429,headers={'retry-after':'7'}))
-            return NS(embeddings=[NS(values=[1.0]*768)])
-    monkeypatch.setattr(genai,'Client',Client)
-    provider=Gemini(Settings(gemini_api_key='synthetic-test-key',gemini_free_tier_confirmed=True))
-    monkeypatch.setattr(provider,'wait',lambda value:waits.append(value))
-    result=provider.embed(['public fixture'],'RETRIEVAL_DOCUMENT')
-    assert len(calls)==2 and any(w>=7 for w in waits)
-    assert calls[0]['model']=='gemini-embedding-001' and calls[0]['config'].output_dimensionality==768
-    assert sum(v*v for v in result[0])==pytest.approx(1)

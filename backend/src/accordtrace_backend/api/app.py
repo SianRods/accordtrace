@@ -14,12 +14,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from ..core import DomainError, PARSER_VERSION, Settings, digest
-from ..graph import driver
-from ..ingestion import enqueue
-from ..storage import ActiveSnapshot, Chunk, Document, Job, LogicalDocument, Snapshot, Span, engine
-from ..retrieval import SearchPacket,SearchRequest, search, evidence as chunk_evidence
-from ..indexing import activate, enqueue_index
+from accordtrace_backend.common.core import DomainError, PARSER_VERSION, Settings, digest
+from accordtrace_backend.integrations.graph import driver
+from accordtrace_backend.ingestion.pipeline import enqueue
+from accordtrace_backend.persistence.storage import ActiveSnapshot, Chunk, Document, Job, LogicalDocument, Snapshot, Span, engine
+from accordtrace_backend.retrieval.search import SearchPacket, SearchRequest, search, evidence as chunk_evidence
+from accordtrace_backend.indexing.pipeline import activate, enqueue_index
 
 LOG=logging.getLogger('accordtrace.requests')
 LOG.setLevel(logging.INFO)
@@ -77,6 +77,7 @@ def create_app(settings: Settings|None=None):
             raise DomainError('api_credentials_not_configured',503)
         if authorization is None or not secrets.compare_digest(authorization,'Bearer '+configured):
             raise DomainError('unauthorized',401)
+        return settings.local_principal_id
 
     def session():
         with Session(db_engine) as db:
@@ -98,7 +99,8 @@ def create_app(settings: Settings|None=None):
                 pointer=db.get(ActiveSnapshot,1)
                 active_id=pointer.snapshot_id if pointer else None
                 active=db.get(Snapshot,active_id) if active_id else None
-                search_ready=bool(active and active.search_ready)
+                from accordtrace_backend.indexing.embedding import mode_matches
+                search_ready=bool(active and active.search_ready and mode_matches(settings,active.configuration.get('embedding',{})))
             checks['postgres']='ready'
         except Exception: checks['postgres']='unavailable'
         try:
@@ -112,9 +114,13 @@ def create_app(settings: Settings|None=None):
             checks['qdrant']='ready'
         except Exception: checks['qdrant']='unavailable'
         ok=all(v=='ready' for v in checks.values())
+        from accordtrace_backend.chat.checkpoints import ready as checkpoints_ready
+        from accordtrace_backend.chat.providers import configured as chat_configured
+        chat_ready=bool(ok and search_ready and checkpoints_ready(db_engine) and chat_configured(settings))
         return JSONResponse(status_code=200 if ok else 503,content=dict(
             status='ready' if ok else 'unavailable',dependencies=checks,graph_ready=graph_ready,
-            search_ready=search_ready and ok,active_snapshot_id=active_id))
+            search_ready=search_ready and ok,chat_ready=chat_ready,active_snapshot_id=active_id,
+            offline_mode=settings.offline_mode))
 
     protection=[Depends(auth)]
 
@@ -198,7 +204,7 @@ def create_app(settings: Settings|None=None):
     @app.post('/api/v1/admin/index-builds',status_code=202,dependencies=protection)
     def build(body:BuildRequest,idempotency_key:Annotated[str,Header(min_length=1,max_length=160)]):
         if body.manifest_id:
-            from ..updates import enqueue_manifest
+            from accordtrace_backend.indexing.updates import enqueue_manifest
             return job_view(enqueue_manifest(settings,db_engine,idempotency_key,body.manifest_id,str(body.base_snapshot_id)))
         return job_view(enqueue_index(settings,db_engine,idempotency_key,str(body.base_snapshot_id)))
 
@@ -210,4 +216,6 @@ def create_app(settings: Settings|None=None):
     def publish(snapshot_id:uuid.UUID,body:ActivateRequest):
         return activate(settings,db_engine,str(snapshot_id),body.expected_generation)
 
+    from accordtrace_backend.chat.api import install
+    install(app,settings,db_engine,auth)
     return app

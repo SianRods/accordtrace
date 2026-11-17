@@ -9,10 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from qdrant_client import models as qm
 
-from . import embedding,graph,vectorstore
-from .core import DomainError,digest
-from .indexing import pin,snapshot_documents
-from .storage import Chunk,ChunkMembership,Document,LogicalDocument,Reference,Resolution,Span,Term
+from accordtrace_backend.indexing import embedding
+from accordtrace_backend.integrations import graph
+from accordtrace_backend.integrations import vectorstore
+from accordtrace_backend.common.core import DomainError, digest
+from accordtrace_backend.indexing.pipeline import pin, snapshot_documents
+from accordtrace_backend.persistence.storage import Chunk, ChunkMembership, Document, LogicalDocument, Reference, Resolution, Span, Term
 
 
 class SearchRequest(BaseModel):
@@ -118,13 +120,15 @@ def evidence(db,chunk):
         parent_start=parent.start,parent_end=parent.end,context_truncated=(chunk.start,chunk.end)!=(parent.start,parent.end))
 
 
-def search(settings,db_engine,request,provider=None):
+def search(settings,db_engine,request,provider=None,budget=None):
     started=time.monotonic();warnings=[];limits=[];paths=[]
+    if budget:budget.check()
     if request.mode=='auto' and not request.section_label and not request.defined_term:
         identifiers=set(re.findall(r'\b[Ss]ection\s+(\d{1,2}\.\d{1,2}(?:\([a-zivx0-9]+\))*)',request.query))
         if len(identifiers)==1:request=request.model_copy(update={'section_label':identifiers.pop()})
     with Session(db_engine) as db:
         snapshot=pin(db,request.snapshot_id);sid=snapshot.id;config=snapshot.configuration
+        embedding.ensure_mode(settings,config['embedding'])
         # Copies of immutable config/IDs leave no transaction open during provider IO.
         docs=[d for d in snapshot_documents(db,sid) if d.agreement_id in request.agreement_ids]
         approved={d.id for d in allowed_documents(db,request.agreement_ids)}
@@ -167,7 +171,8 @@ def search(settings,db_engine,request,provider=None):
         try:
             if config['embedding']['verification']!='live' and provider is None:raise DomainError('mock_profile_requires_test_provider')
             query_vector=embedding.cached_embeddings(db_engine,config['embedding'],[request.query],
-                'RETRIEVAL_QUERY',provider or embedding.Gemini(settings))[0]
+                'RETRIEVAL_QUERY',provider or (budget.embedding_provider(settings,config['embedding']) if budget else embedding.provider_for(settings,config['embedding'])),
+                heartbeat=budget.check if budget else lambda:None)[0]
         except DomainError as exc:
             warnings.append(dict(code=exc.code,component='dense'));mode='lexical'
     elif request.mode=='lexical':mode='lexical'
@@ -220,7 +225,7 @@ def search(settings,db_engine,request,provider=None):
         if time.monotonic()-started>10:limits.append('search_deadline')
         elif seeds:
             try:
-                expanded,graph_paths,gaps,limited=expand_graph(settings,sid,seeds,document_ids,started+10)
+                expanded,graph_paths,gaps,limited=expand_graph(settings,sid,seeds,document_ids,started+10,budget)
                 paths.extend(graph_paths);unresolved.extend(gaps)
                 if limited:limits.append('graph_unit_budget')
                 for span_id in expanded:
@@ -262,7 +267,7 @@ def search(settings,db_engine,request,provider=None):
             evidence_tokens=consumed,seed_count=len(seeds),expanded_count=len(selected)-len(seeds))).model_dump()
 
 
-def expand_graph(settings,sid,seeds,document_ids,deadline=None):
+def expand_graph(settings,sid,seeds,document_ids,deadline=None,budget=None):
     targets=[];paths=[];gaps=[];seen=set();limited=False
     # REFERENCES is one hop; USES_TERM -> incoming DEFINES is exactly two.
     query='''MATCH (source:KBNode {snapshot_id:$sid})
@@ -286,12 +291,14 @@ def expand_graph(settings,sid,seeds,document_ids,deadline=None):
       ORDER BY kind,target LIMIT 13'''
     with graph.driver(settings) as conn,conn.session() as session:
         for seed in seeds:
+            if budget:budget.check()
             if deadline is not None and time.monotonic()>=deadline:limited=True;break
             values=session.run(graph.Query(query,timeout=2),sid=sid,doc=seed['document_version_id'],start=seed['start'],end=seed['end'],documents=list(document_ids)).data()
             if len(values)>12:limited=True
             for path in values:
                 if path['target'] not in seen:
                     if len(targets)>=12:limited=True;continue
+                    if budget and not budget.graph_unit(path['target']):limited=True;continue
                     seen.add(path['target']);targets.append(path['target']);paths.append(path)
             rows=session.run('''MATCH (s:KBNode {snapshot_id:$sid})-[:HAS_UNRESOLVED_REFERENCE]->(u:UnresolvedReference)
                 WHERE s.document_version_id=$doc AND s.start<$end AND s.end>$start AND u.start>=$start AND u.start<$end

@@ -10,13 +10,12 @@ from sqlalchemy import select,text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import embedding
-from .chunking import fingerprint
-from .core import DomainError,PARSER_VERSION,digest,identity
-from .ingestion import immutable_write,owned
-from .parsing import parse
-from .storage import (Artifact,Document,Issue,Job,LogicalDocument,Membership,
-                      Reference,Snapshot,Span,Term,TermUse)
+from accordtrace_backend.indexing import embedding
+from accordtrace_backend.indexing.chunking import fingerprint
+from accordtrace_backend.common.core import DomainError, PARSER_VERSION, digest, identity
+from accordtrace_backend.ingestion.pipeline import immutable_write, owned
+from accordtrace_backend.ingestion.parsing import parse
+from accordtrace_backend.persistence.storage import Artifact, Document, Issue, Job, LogicalDocument, Membership, Reference, Snapshot, Span, Term, TermUse
 
 
 class Entry(BaseModel):
@@ -63,7 +62,7 @@ def read_entry(settings,entry):
 
 
 def enqueue_manifest(settings,db_engine,key,name,base_id,verification='live',config_override=None):
-    from .indexing import snapshot_documents
+    from accordtrace_backend.indexing.pipeline import snapshot_documents
     entries=read_manifest(settings,name)
     if not key or len(key)>160:raise DomainError('invalid_idempotency_key',422)
     if config_override and config_override['embedding']['verification']!='mock':raise DomainError('test_configuration_requires_mock_profile')

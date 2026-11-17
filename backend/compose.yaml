@@ -1,6 +1,6 @@
 name: accordtrace-phase1
 x-app: &app
-  image: accordtrace-backend:phase2
+  image: accordtrace-backend:phase3
   build:
     context: ..
     dockerfile: backend/Dockerfile
@@ -49,6 +49,7 @@ services:
       retries: 20
   api:
     <<: *app
+    restart: unless-stopped
     ports: ["127.0.0.1:8000:8000"]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
@@ -63,6 +64,15 @@ services:
     <<: *app
     profiles: [tools]
     command: [accordtrace-backend, worker, --once]
+  chat-worker:
+    <<: *app
+    restart: unless-stopped
+    profiles: [chat]
+    command: [accordtrace-backend, chat-worker]
+  chat-checkpoint-setup:
+    <<: *app
+    profiles: [tools]
+    command: [accordtrace-backend, chat-checkpoint-setup]
 volumes:
   postgres_data:
   neo4j_data:

@@ -1,13 +1,12 @@
 """Explicit asset preparation, versioned embeddings and no silent paid fallback."""
 import json
 import math
-import time
 from importlib.metadata import version
 
 from tokenizers import Tokenizer
 
-from .chunking import CHUNKER, fingerprint
-from .core import DomainError, digest
+from accordtrace_backend.indexing.chunking import CHUNKER, fingerprint
+from accordtrace_backend.common.core import DomainError, digest
 
 TOKENIZER_REPO='BAAI/bge-small-en-v1.5'
 TOKENIZER_REVISION='ceaf0832d92c2e84b1f50f5122a9310fd2214019'
@@ -41,7 +40,7 @@ def prepare_assets(settings):
     manifest=dict(version='asset-bundle-v1',tokenizer_sha=digest(target.read_bytes()),tokenizer_revision=TOKENIZER_REVISION,
                   sparse_revision=sparse_directory.name,
                   sparse_files=files,fastembed_version=version('fastembed'),tokenizers_version=version('tokenizers'))
-    from .ingestion import immutable_write
+    from accordtrace_backend.ingestion.pipeline import immutable_write
     bundle=directory/'bundles'/fingerprint(manifest)
     immutable_write(bundle/'tokenizer.json',target.read_bytes())
     for name,path in source_files.items():immutable_write(bundle/'bm25'/name,path.read_bytes())
@@ -68,11 +67,32 @@ def assets(settings, manifest=None):
 
 def configuration(settings, verification='live'):
     manifest,_=assets(settings)
-    profile=dict(provider='gemini',model='gemini-embedding-001',dimensions=768,normalization='l2-v1',
-        document_task='RETRIEVAL_DOCUMENT',query_task='RETRIEVAL_QUERY',preprocessing='whitespace-v1',
-        verification=verification,epoch='v1')
+    if verification=='mock':
+        profile=dict(provider='synthetic',model='hash-features-test-only',dimensions=768,normalization='l2-v1',
+            document_task='RETRIEVAL_DOCUMENT',query_task='RETRIEVAL_QUERY',preprocessing='whitespace-v1',
+            verification='mock',epoch='v1')
+    else:
+        from .ollama import Ollama
+        profile=Ollama(settings).describe()
     return dict(version='search-v1',parser='structural-v3',graph='structural-graph-v2',
                 chunker=CHUNKER,assets=manifest,sparse=SPARSE,embedding=profile)
+
+
+def mode_matches(settings,profile):
+    return profile.get('verification')=='mock' or profile.get('provider')=='ollama'
+
+
+def ensure_mode(settings,profile):
+    if not mode_matches(settings,profile):raise DomainError('embedding_mode_mismatch')
+
+
+def provider_for(settings,profile):
+    ensure_mode(settings,profile)
+    if profile.get('verification')!='live':raise DomainError('mock_profile_requires_test_provider')
+    if profile.get('provider')=='ollama':
+        from .ollama import Ollama
+        return Ollama(settings,profile)
+    raise DomainError('unsupported_embedding_profile')
 
 
 def validate_vector(vector,dimension=768):
@@ -84,57 +104,11 @@ def validate_vector(vector,dimension=768):
     return [float(v)/norm for v in vector]
 
 
-class Gemini:
-    def __init__(self,settings):
-        self.settings=settings
-        self.last_call=0.0
-        self.heartbeat=lambda:None
-
-    def wait(self,seconds):
-        deadline=time.monotonic()+seconds
-        while time.monotonic()<deadline:
-            self.heartbeat()
-            time.sleep(min(5,max(0,deadline-time.monotonic())))
-
-    def embed(self,inputs,task):
-        if not self.settings.gemini_api_key.get_secret_value():raise DomainError('gemini_credentials_missing',503)
-        if not self.settings.gemini_free_tier_confirmed:raise DomainError('gemini_free_tier_not_confirmed',503)
-        if any(len(value.encode())>1536 for value in inputs):raise DomainError('embedding_input_too_large',422)
-        from google import genai
-        from google.genai import types,errors
-        attempts=1 if task=='RETRIEVAL_QUERY' else 3
-        for attempt in range(attempts):
-            if task!='RETRIEVAL_QUERY':
-                self.wait(max(0,60/self.settings.embedding_requests_per_minute-(time.monotonic()-self.last_call)))
-            try:
-                self.heartbeat()
-                self.last_call=time.monotonic()
-                with genai.Client(api_key=self.settings.gemini_api_key.get_secret_value(),
-                    http_options=types.HttpOptions(timeout=(5000 if task=='RETRIEVAL_QUERY' else self.settings.embedding_timeout_seconds*1000),
-                                                   retry_options=types.HttpRetryOptions(attempts=1))) as client:
-                    response=client.models.embed_content(model='gemini-embedding-001',contents=inputs,
-                        config=types.EmbedContentConfig(task_type=task,output_dimensionality=768))
-                if not response.embeddings or len(response.embeddings)!=len(inputs):raise DomainError('embedding_count_mismatch')
-                return [validate_vector(e.values) for e in response.embeddings]
-            except errors.APIError as exc:
-                if exc.code not in (429,500,502,503,504) or attempt+1==attempts:
-                    raise DomainError('embedding_quota_exhausted' if exc.code==429 else 'embedding_provider_unavailable',503) from None
-                import random
-                response=getattr(exc,'response',None)
-                retry_after=getattr(response,'headers',{}).get('retry-after','0')
-                try:delay=float(retry_after)
-                except (ValueError,TypeError):delay=0
-                if delay>30:raise DomainError('embedding_quota_exhausted',503) from None
-                self.wait(max(delay,min(15,2**attempt+random.random())))
-            except DomainError:raise
-            except Exception:raise DomainError('embedding_provider_unavailable',503) from None
-
-
 def cached_embeddings(db_engine,profile,inputs,task,provider,heartbeat=lambda:None):
     from sqlalchemy import select
     from sqlalchemy.orm import Session
     from sqlalchemy.dialects.postgresql import insert
-    from .storage import EmbeddingCache,EmbeddingProfile
+    from accordtrace_backend.persistence.storage import EmbeddingCache, EmbeddingProfile
     pid=fingerprint(profile)
     with Session(db_engine) as db,db.begin():
         db.execute(insert(EmbeddingProfile).values(id=pid,configuration=profile).on_conflict_do_nothing())
@@ -146,8 +120,7 @@ def cached_embeddings(db_engine,profile,inputs,task,provider,heartbeat=lambda:No
     missing=list(dict.fromkeys(k for k in keys if k not in found))
     by_key=dict(zip(keys,inputs))
     def complete(batch):
-        # Recheck after acquiring the shared provider lock: another worker may
-        # have populated these exact inputs while this one was waiting.
+        # Recheck the cache: another worker may have completed these inputs.
         with Session(db_engine) as db:
             for row in db.scalars(select(EmbeddingCache).where(EmbeddingCache.id.in_(batch))):
                 found[row.id]=validate_vector(row.vector,profile['dimensions'])
@@ -167,17 +140,7 @@ def cached_embeddings(db_engine,profile,inputs,task,provider,heartbeat=lambda:No
     for offset in range(0,len(missing),16):
         batch=missing[offset:offset+16]
         heartbeat()
-        if isinstance(provider,Gemini):provider.heartbeat=heartbeat
-        # One hosted batch across worker processes. Interactive requests degrade
-        # rather than wait behind an indexing batch.
-        if isinstance(provider,Gemini):
-            from sqlalchemy import text
-            with db_engine.connect() as lock:
-                deadline=time.monotonic()+30
-                while not lock.execute(text('SELECT pg_try_advisory_lock(71240612)')).scalar():
-                    if task=='RETRIEVAL_QUERY' or time.monotonic()>deadline:raise DomainError('embedding_provider_busy',503)
-                    heartbeat();time.sleep(1)
-                try:complete(batch)
-                finally:lock.execute(text('SELECT pg_advisory_unlock(71240612)'))
-        else:complete(batch)
+        from .ollama import Ollama
+        if isinstance(provider,Ollama):provider.heartbeat=heartbeat
+        complete(batch)
     return [found[key] for key in keys]

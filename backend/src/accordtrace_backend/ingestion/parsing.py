@@ -3,7 +3,7 @@ import bisect
 import re
 from dataclasses import asdict, dataclass, field
 
-from .core import PARSER_VERSION, digest, identity
+from accordtrace_backend.common.core import PARSER_VERSION, digest, identity
 
 
 def normalized_view(text: str) -> tuple[str, list[tuple[int, int]]]:

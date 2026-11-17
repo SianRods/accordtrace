@@ -6,7 +6,7 @@ import sys
 from sqlalchemy import create_engine,text
 from sqlalchemy.engine import make_url
 
-from accordtrace_backend.core import Settings
+from accordtrace_backend.common.core import Settings
 
 
 def main():
