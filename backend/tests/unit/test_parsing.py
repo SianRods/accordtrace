@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from accordtrace_backend.core import Settings, digest, identity
-from accordtrace_backend.ingestion import sources
-from accordtrace_backend.parsing import normalized_view, parse
+from accordtrace_backend.common.core import Settings, digest, identity
+from accordtrace_backend.ingestion.pipeline import sources
+from accordtrace_backend.ingestion.parsing import normalized_view, parse
 
 
 def test_normalization_is_reversible_with_unicode_and_crlf():
@@ -50,7 +50,7 @@ def test_external_original_agreement_is_not_current_target():
 
 
 def test_parser_version_is_part_of_every_artifact_identity(monkeypatch):
-    from accordtrace_backend import parsing
+    from accordtrace_backend.ingestion import parsing as parsing
     text='Section 1.1  Definitions.\n\n“Price” means $10.\n\nSection 2.1  Payment. Pay Price under Section 1.1.'
     before=parsing.parse(text,'doc')
     monkeypatch.setattr(parsing,'PARSER_VERSION','changed-test-version')

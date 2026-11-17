@@ -13,3 +13,9 @@ services:
     volumes:
       - ./src:/opt/app/backend/src:ro
       - ./migrations:/opt/app/backend/migrations:ro
+  chat-worker:
+    volumes:
+      - ./src:/opt/app/backend/src:ro
+  chat-checkpoint-setup:
+    volumes:
+      - ./src:/opt/app/backend/src:ro

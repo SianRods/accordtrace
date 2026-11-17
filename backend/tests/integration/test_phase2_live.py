@@ -17,14 +17,17 @@ from qdrant_client import models as qm
 from sqlalchemy import func,select
 from sqlalchemy.orm import Session
 
-from accordtrace_backend import embedding,graph,indexing,ingestion,vectorstore
+from accordtrace_backend.indexing import embedding as embedding
+from accordtrace_backend.integrations import graph as graph
+from accordtrace_backend.indexing import pipeline as indexing
+from accordtrace_backend.ingestion import pipeline as ingestion
+from accordtrace_backend.integrations import vectorstore as vectorstore
 from accordtrace_backend.api.app import create_app
-from accordtrace_backend.chunking import fingerprint
-from accordtrace_backend.core import DomainError,Settings,digest,identity
-from accordtrace_backend.retrieval import SearchRequest,search
-from accordtrace_backend.storage import (ActiveSnapshot,Artifact,Chunk,Document,EmbeddingCache,
-    Job,LogicalDocument,Reference,Resolution,Snapshot,Span,engine)
-from accordtrace_backend.updates import enqueue_manifest
+from accordtrace_backend.indexing.chunking import fingerprint
+from accordtrace_backend.common.core import DomainError, Settings, digest, identity
+from accordtrace_backend.retrieval.search import SearchRequest, search
+from accordtrace_backend.persistence.storage import ActiveSnapshot, Artifact, Chunk, Document, EmbeddingCache, Job, LogicalDocument, Reference, Resolution, Snapshot, Span, engine
+from accordtrace_backend.indexing.updates import enqueue_manifest
 
 pytestmark=[pytest.mark.integration,pytest.mark.skipif(os.environ.get('ACCORDTRACE_PHASE2_INTEGRATION')!='1',
                reason='Requires isolated Phase 2 Compose checks database')]

@@ -5,10 +5,10 @@ from pydantic import SecretStr
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from accordtrace_backend.core import Settings
-from accordtrace_backend.indexing import validate
-from accordtrace_backend.retrieval import SearchRequest,search
-from accordtrace_backend.storage import ActiveSnapshot,Snapshot,engine
+from accordtrace_backend.common.core import Settings
+from accordtrace_backend.indexing.pipeline import validate
+from accordtrace_backend.retrieval.search import SearchRequest, search
+from accordtrace_backend.persistence.storage import ActiveSnapshot, Snapshot, engine
 
 
 def main():

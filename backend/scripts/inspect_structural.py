@@ -5,8 +5,8 @@ from collections import Counter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from accordtrace_backend.core import PARSER_VERSION, Settings
-from accordtrace_backend.storage import Document, Issue, Reference, Span, Term, engine
+from accordtrace_backend.common.core import PARSER_VERSION, Settings
+from accordtrace_backend.persistence.storage import Document, Issue, Reference, Span, Term, engine
 
 
 def main():

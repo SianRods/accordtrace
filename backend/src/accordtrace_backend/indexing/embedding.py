@@ -6,8 +6,8 @@ from importlib.metadata import version
 
 from tokenizers import Tokenizer
 
-from .chunking import CHUNKER, fingerprint
-from .core import DomainError, digest
+from accordtrace_backend.indexing.chunking import CHUNKER, fingerprint
+from accordtrace_backend.common.core import DomainError, digest
 
 TOKENIZER_REPO='BAAI/bge-small-en-v1.5'
 TOKENIZER_REVISION='ceaf0832d92c2e84b1f50f5122a9310fd2214019'
@@ -41,7 +41,7 @@ def prepare_assets(settings):
     manifest=dict(version='asset-bundle-v1',tokenizer_sha=digest(target.read_bytes()),tokenizer_revision=TOKENIZER_REVISION,
                   sparse_revision=sparse_directory.name,
                   sparse_files=files,fastembed_version=version('fastembed'),tokenizers_version=version('tokenizers'))
-    from .ingestion import immutable_write
+    from accordtrace_backend.ingestion.pipeline import immutable_write
     bundle=directory/'bundles'/fingerprint(manifest)
     immutable_write(bundle/'tokenizer.json',target.read_bytes())
     for name,path in source_files.items():immutable_write(bundle/'bm25'/name,path.read_bytes())
@@ -84,11 +84,32 @@ def validate_vector(vector,dimension=768):
     return [float(v)/norm for v in vector]
 
 
+def retry_seconds(error):
+    """Honor Google's structured RetryInfo as well as the HTTP header."""
+    response=getattr(error,'response',None)
+    value=getattr(response,'headers',{}).get('retry-after','0')
+    try:delay=float(value)
+    except (ValueError,TypeError):delay=0
+    def visit(value):
+        nonlocal delay
+        if isinstance(value,dict):
+            if 'retryDelay' in value:
+                try:delay=max(delay,float(str(value['retryDelay']).removesuffix('s')))
+                except (ValueError,TypeError):pass
+            for child in value.values():visit(child)
+        elif isinstance(value,list):
+            for child in value:visit(child)
+    visit(getattr(error,'details',None))
+    visit(getattr(error,'response_json',None))
+    return delay
+
+
 class Gemini:
     def __init__(self,settings):
         self.settings=settings
         self.last_call=0.0
         self.heartbeat=lambda:None
+        self.query_timeout_seconds=5
 
     def wait(self,seconds):
         deadline=time.monotonic()+seconds
@@ -110,7 +131,7 @@ class Gemini:
                 self.heartbeat()
                 self.last_call=time.monotonic()
                 with genai.Client(api_key=self.settings.gemini_api_key.get_secret_value(),
-                    http_options=types.HttpOptions(timeout=(5000 if task=='RETRIEVAL_QUERY' else self.settings.embedding_timeout_seconds*1000),
+                    http_options=types.HttpOptions(timeout=(int(self.query_timeout_seconds*1000) if task=='RETRIEVAL_QUERY' else self.settings.embedding_timeout_seconds*1000),
                                                    retry_options=types.HttpRetryOptions(attempts=1))) as client:
                     response=client.models.embed_content(model='gemini-embedding-001',contents=inputs,
                         config=types.EmbedContentConfig(task_type=task,output_dimensionality=768))
@@ -120,10 +141,7 @@ class Gemini:
                 if exc.code not in (429,500,502,503,504) or attempt+1==attempts:
                     raise DomainError('embedding_quota_exhausted' if exc.code==429 else 'embedding_provider_unavailable',503) from None
                 import random
-                response=getattr(exc,'response',None)
-                retry_after=getattr(response,'headers',{}).get('retry-after','0')
-                try:delay=float(retry_after)
-                except (ValueError,TypeError):delay=0
+                delay=retry_seconds(exc)
                 if delay>30:raise DomainError('embedding_quota_exhausted',503) from None
                 self.wait(max(delay,min(15,2**attempt+random.random())))
             except DomainError:raise
@@ -134,7 +152,7 @@ def cached_embeddings(db_engine,profile,inputs,task,provider,heartbeat=lambda:No
     from sqlalchemy import select
     from sqlalchemy.orm import Session
     from sqlalchemy.dialects.postgresql import insert
-    from .storage import EmbeddingCache,EmbeddingProfile
+    from accordtrace_backend.persistence.storage import EmbeddingCache, EmbeddingProfile
     pid=fingerprint(profile)
     with Session(db_engine) as db,db.begin():
         db.execute(insert(EmbeddingProfile).values(id=pid,configuration=profile).on_conflict_do_nothing())

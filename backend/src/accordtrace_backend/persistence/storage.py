@@ -5,7 +5,7 @@ from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, ForeignKey,
                         Integer, String, Text, UniqueConstraint, create_engine)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .core import Settings
+from accordtrace_backend.common.core import Settings
 
 
 def utcnow():

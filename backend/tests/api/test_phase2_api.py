@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from accordtrace_backend.api.app import create_app
-from accordtrace_backend.core import Settings
+from accordtrace_backend.common.core import Settings
 
 
 def test_phase2_auth_and_validation_do_not_call_providers():

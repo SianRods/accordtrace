@@ -5,8 +5,8 @@ from neo4j import GraphDatabase, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .core import Settings, identity
-from .storage import Document, Membership, Span, Term, TermUse, Reference, Resolution
+from accordtrace_backend.common.core import Settings, identity
+from accordtrace_backend.persistence.storage import Document, Membership, Span, Term, TermUse, Reference, Resolution
 
 LABELS = ('DocumentVersion','Section','Clause','DefinedTerm','UnresolvedReference')
 EDGES = ('CONTAINS','DEFINES','USES_TERM','REFERENCES','HAS_UNRESOLVED_REFERENCE')

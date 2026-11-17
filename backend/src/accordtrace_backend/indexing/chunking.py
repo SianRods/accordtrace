@@ -2,7 +2,7 @@
 import json
 import re
 
-from .core import DomainError, digest, identity
+from accordtrace_backend.common.core import DomainError, digest, identity
 
 CHUNKER = dict(version='children-v1', target=320, maximum=360, overlap=40,
                input_bytes=1536, breadcrumb_tokens=32, preprocessing='whitespace-v1')

@@ -8,12 +8,13 @@ from sqlalchemy import select,text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import embedding,graph,vectorstore
-from .chunking import chunks,fingerprint,partitions
-from .core import DomainError,Settings,digest,identity
-from .ingestion import owned
-from .storage import (Activation,ActiveSnapshot,Artifact,Chunk,ChunkMembership,Document,
-    Job,LogicalDocument,Membership,Resolution,Snapshot,Span,Reference)
+from accordtrace_backend.indexing import embedding
+from accordtrace_backend.integrations import graph
+from accordtrace_backend.integrations import vectorstore
+from accordtrace_backend.indexing.chunking import chunks, fingerprint, partitions
+from accordtrace_backend.common.core import DomainError, Settings, digest, identity
+from accordtrace_backend.ingestion.pipeline import owned
+from accordtrace_backend.persistence.storage import Activation, ActiveSnapshot, Artifact, Chunk, ChunkMembership, Document, Job, LogicalDocument, Membership, Resolution, Snapshot, Span, Reference
 
 
 def snapshot_documents(db,sid):
@@ -78,10 +79,10 @@ def process_index(settings,db_engine,claimed,provider=None):
                     job.status='succeeded';job.stage='search_ready';job.lease_token=None;job.lease_until=None
                 db.commit();return
         if 'manifest' in config:
-            from .updates import materialize
+            from accordtrace_backend.indexing.updates import materialize
             materialize(settings,db_engine,claimed,config)
         _,tokenizer=embedding.assets(settings,config['assets'])
-        from .chunking import CHUNKER
+        from accordtrace_backend.indexing.chunking import CHUNKER
         if config['chunker']!=CHUNKER or config['sparse']!=embedding.SPARSE:raise DomainError('unsupported_index_configuration')
         chunker_hash=fingerprint(dict(chunker=config['chunker'],assets=config['assets']))
         with Session(db_engine) as db:
@@ -134,7 +135,7 @@ def process_index(settings,db_engine,claimed,provider=None):
             job=owned(db,job_id,token,settings.lease_seconds)
             job.status='succeeded';job.stage='search_ready';job.lease_token=None;job.lease_until=None
     except Exception as exc:
-        from .storage import utcnow
+        from accordtrace_backend.persistence.storage import utcnow
         with Session(db_engine) as db,db.begin():
             job=db.get(Job,job_id,with_for_update=True)
             if job and job.status=='running' and job.lease_token==token and job.lease_until>utcnow():

@@ -10,11 +10,10 @@ from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 
-from . import graph
-from .core import DomainError, PARSER_VERSION, Settings, digest, identity
-from .parsing import parse
-from .storage import (Artifact, Document, Issue, Job, LogicalDocument, Membership, Reference, Snapshot,
-                      Span, Term, TermUse, engine, utcnow)
+from accordtrace_backend.integrations import graph
+from accordtrace_backend.common.core import DomainError, PARSER_VERSION, Settings, digest, identity
+from accordtrace_backend.ingestion.parsing import parse
+from accordtrace_backend.persistence.storage import Artifact, Document, Issue, Job, LogicalDocument, Membership, Reference, Snapshot, Span, Term, TermUse, engine, utcnow
 
 
 def sources(settings: Settings):
@@ -197,7 +196,7 @@ def work(settings: Settings, once=True):
             if claimed:
                 with Session(db_engine) as db:kind=db.get(Job,claimed[0]).kind
                 if kind=='index':
-                    from .indexing import process_index
+                    from accordtrace_backend.indexing.pipeline import process_index
                     process_index(settings,db_engine,claimed)
                 else:process(settings,db_engine,claimed)
             if once: return bool(claimed)

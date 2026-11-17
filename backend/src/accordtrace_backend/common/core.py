@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 NAMESPACE = uuid.UUID('da64cd55-3b0c-491a-9fb5-0328da68cf08')
 PARSER_VERSION = 'structural-v3'
 
@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     embedding_requests_per_minute: int = Field(5, ge=1)
     approved_manifests: tuple[str, ...] = ()
     approved_manifest_dir: Path|None = None
+    groq_api_key: SecretStr = SecretStr('')
+    groq_free_tier_confirmed: bool = False
+    local_principal_id: str = Field('local',min_length=1,max_length=100)
+    chat_active_seconds: int = Field(30,ge=1,le=120)
+    chat_lifetime_seconds: int = Field(600,ge=30,le=3600)
+    chat_provider_timeout_seconds: int = Field(20,ge=1,le=60)
+    chat_groq_rpm: int = Field(30,ge=1)
+    chat_groq_tpm: int = Field(8000,ge=1)
+    chat_groq_rpd: int = Field(1000,ge=1)
+    chat_groq_tpd: int = Field(200000,ge=1)
+    chat_gemini_rpm: int = Field(5,ge=1)
+    chat_gemini_tpm: int = Field(6000,ge=1)
+    chat_gemini_rpd: int = Field(100,ge=1)
 
     @property
     def runtime(self) -> Path:

@@ -14,11 +14,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from accordtrace_backend import graph, ingestion
+from accordtrace_backend.integrations import graph as graph
+from accordtrace_backend.ingestion import pipeline as ingestion
 from accordtrace_backend.api.app import create_app
-from accordtrace_backend.core import DomainError, PARSER_VERSION, Settings, digest
-from accordtrace_backend.storage import (Artifact, Document, Job, Membership,
-    Reference, Snapshot, Span, Term, TermUse, engine, utcnow)
+from accordtrace_backend.common.core import DomainError, PARSER_VERSION, Settings, digest
+from accordtrace_backend.persistence.storage import Artifact, Document, Job, Membership, Reference, Snapshot, Span, Term, TermUse, engine, utcnow
 
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(
     os.environ.get('ACCORDTRACE_INTEGRATION') != '1', reason='Requires local Compose services')]

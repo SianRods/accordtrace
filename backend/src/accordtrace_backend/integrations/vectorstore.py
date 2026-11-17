@@ -2,7 +2,7 @@
 from qdrant_client import QdrantClient, models as m
 from contextlib import closing
 
-from .core import DomainError,identity
+from accordtrace_backend.common.core import DomainError, identity
 
 
 def client(settings):
@@ -56,7 +56,7 @@ def reconcile(conn,name,sid,rows,profile,documents):
                 document_version_id=row.document_id,agreement_id=documents[row.document_id].agreement_id,
                 start=row.start,end=row.end,text_hash=row.text_hash,is_toc=False).items()):
                 raise DomainError('point_payload_mismatch')
-            from .embedding import validate_vector
+            from accordtrace_backend.indexing.embedding import validate_vector
             vector=point.vector['dense']
             validate_vector(vector,profile['dimensions'])
             if abs(sum(v*v for v in vector)-1)>0.001:raise DomainError('vector_normalization_failed')

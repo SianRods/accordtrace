@@ -3,11 +3,11 @@ from types import SimpleNamespace as NS
 import pytest
 from tokenizers import Tokenizer,models,pre_tokenizers,trainers
 
-from accordtrace_backend.chunking import chunks,fingerprint,partitions
-from accordtrace_backend.core import DomainError,Settings,digest
-from accordtrace_backend.embedding import Gemini,validate_vector
-from accordtrace_backend.retrieval import SearchRequest,rrf
-from accordtrace_backend.updates import read_manifest
+from accordtrace_backend.indexing.chunking import chunks, fingerprint, partitions
+from accordtrace_backend.common.core import DomainError, Settings, digest
+from accordtrace_backend.indexing.embedding import Gemini, validate_vector
+from accordtrace_backend.retrieval.search import SearchRequest, rrf
+from accordtrace_backend.indexing.updates import read_manifest
 
 
 def tokenizer():
@@ -87,3 +87,22 @@ def test_gemini_retry_after_and_standard_api(monkeypatch):
     assert len(calls)==2 and any(w>=7 for w in waits)
     assert calls[0]['model']=='gemini-embedding-001' and calls[0]['config'].output_dimensionality==768
     assert sum(v*v for v in result[0])==pytest.approx(1)
+
+
+def test_gemini_daily_retry_info_stops_repeated_calls(monkeypatch):
+    from google import genai
+    from google.genai import errors
+    calls=[]
+    class Client:
+        def __init__(self,**kwargs):self.models=self
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def embed_content(self,**kwargs):
+            calls.append(kwargs)
+            raise errors.APIError(429,{'error':{'message':'fixture quota','details':[
+                {'@type':'type.googleapis.com/google.rpc.RetryInfo','retryDelay':'85241s'}]}})
+    monkeypatch.setattr(genai,'Client',Client)
+    provider=Gemini(Settings(gemini_api_key='synthetic-test-key',gemini_free_tier_confirmed=True))
+    monkeypatch.setattr(provider,'wait',lambda seconds:None)
+    with pytest.raises(DomainError,match='embedding_quota_exhausted'):provider.embed(['public fixture'],'RETRIEVAL_DOCUMENT')
+    assert len(calls)==1
