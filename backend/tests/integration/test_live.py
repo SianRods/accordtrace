@@ -18,7 +18,7 @@ from accordtrace_backend.integrations import graph as graph
 from accordtrace_backend.ingestion import pipeline as ingestion
 from accordtrace_backend.api.app import create_app
 from accordtrace_backend.common.core import DomainError, PARSER_VERSION, Settings, digest
-from accordtrace_backend.persistence.storage import Artifact, Document, Job, Membership, Reference, Snapshot, Span, Term, TermUse, engine, utcnow
+from accordtrace_backend.persistence.storage import ActiveSnapshot, Artifact, Document, Job, Membership, Reference, Snapshot, Span, Term, TermUse, engine, utcnow
 
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(
     os.environ.get('ACCORDTRACE_INTEGRATION') != '1', reason='Requires local Compose services')]
@@ -27,6 +27,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.skipif(
 def test_live_ingestion_recovery_projection_and_evidence(monkeypatch):
     settings = Settings()
     db_engine = engine(settings)
+    with Session(db_engine) as db:
+        pointer=db.get(ActiveSnapshot,1)
+        active_before=pointer.snapshot_id if pointer else None
     key = 'acceptance-' + str(uuid.uuid4())
     before, _ = ingestion.sources(settings)
     job = ingestion.enqueue(settings, db_engine, key)
@@ -107,7 +110,9 @@ def test_live_ingestion_recovery_projection_and_evidence(monkeypatch):
     with TestClient(create_app(settings)) as client:
         ready = client.get('/health/ready')
         assert ready.status_code == 200 and ready.json()['graph_ready']
-        assert not ready.json()['search_ready']
+        # Phase 1 ingestion must not replace an already activated Phase 2/3 index.
+        assert ready.json()['active_snapshot_id']==active_before
+        with Session(db_engine) as db:assert not db.get(Snapshot,job.snapshot_id).search_ready
         docs = client.get('/api/v1/documents', headers=headers).json()['items']
         assert len(docs) == 6
         for doc in docs:

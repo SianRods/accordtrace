@@ -14,21 +14,24 @@ from accordtrace_backend.chat.schemas import Plan, provider_schema
 def preflight(settings,engine,live=False):
     with Session(engine) as db:
         pointer=db.get(ActiveSnapshot,1);snapshot=db.get(Snapshot,pointer.snapshot_id) if pointer and pointer.snapshot_id else None
-        active=bool(snapshot and snapshot.search_ready and snapshot.configuration['embedding']['verification']=='live')
-    result=dict(checkpoints=checkpoints.ready(engine),credentials_configured=configured(settings),live_search_snapshot=active,live_checked=False)
+        from accordtrace_backend.indexing.embedding import mode_matches
+        active=bool(snapshot and snapshot.search_ready and snapshot.configuration['embedding']['verification']=='live' and mode_matches(settings,snapshot.configuration['embedding']))
+    result=dict(checkpoints=checkpoints.ready(engine),credentials_configured=configured(settings),live_search_snapshot=active,live_checked=False,offline_mode=settings.offline_mode)
     if live:
         if not all(result[k] for k in ('checkpoints','credentials_configured','live_search_snapshot')):raise DomainError('live_preflight_prerequisites_missing')
         # Explicit operator smoke only: no hidden SDK retries or model substitutions.
         from accordtrace_backend.chat.prompts import MODELS
-        from accordtrace_backend.chat.providers import quota_reserve, quota_result
+        from accordtrace_backend.chat.providers import quota_reserve, quota_result, request_estimate
         from accordtrace_backend.chat.schemas import Draft, Review
         roles={'planner':Plan,'draft':Draft,'reviewer':Review};usage={}
         for role,model_type in roles.items():
             provider,model=MODELS[role]
-            with Session(engine) as db,db.begin():quota_reserve(db,settings,provider,model,4096)
-            value,used=LiveProviders(settings).generate(role,{'question':'Smoke check only. No evidence is supplied; return empty claims/tasks/verdicts and a clarification/gap.'},provider_schema(model_type),10,1024)
+            payload={'question':'Smoke check only. No evidence is supplied; return empty claims/tasks/verdicts and a clarification/gap.'}
+            schema=provider_schema(model_type);estimate=request_estimate(role,payload,schema,1024)
+            with Session(engine) as db,db.begin():quota_reserve(db,settings,provider,model,estimate)
+            value,used=LiveProviders(settings).generate(role,payload,schema,10,1024)
             model_type.model_validate(value)
-            with Session(engine) as db,db.begin():quota_result(db,provider,model,4096,used)
+            with Session(engine) as db,db.begin():quota_result(db,provider,model,estimate,used)
             usage[role]=used
         result.update(live_checked=True,usage=usage)
     return result

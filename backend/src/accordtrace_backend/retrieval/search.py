@@ -128,6 +128,7 @@ def search(settings,db_engine,request,provider=None,budget=None):
         if len(identifiers)==1:request=request.model_copy(update={'section_label':identifiers.pop()})
     with Session(db_engine) as db:
         snapshot=pin(db,request.snapshot_id);sid=snapshot.id;config=snapshot.configuration
+        embedding.ensure_mode(settings,config['embedding'])
         # Copies of immutable config/IDs leave no transaction open during provider IO.
         docs=[d for d in snapshot_documents(db,sid) if d.agreement_id in request.agreement_ids]
         approved={d.id for d in allowed_documents(db,request.agreement_ids)}
@@ -170,7 +171,8 @@ def search(settings,db_engine,request,provider=None,budget=None):
         try:
             if config['embedding']['verification']!='live' and provider is None:raise DomainError('mock_profile_requires_test_provider')
             query_vector=embedding.cached_embeddings(db_engine,config['embedding'],[request.query],
-                'RETRIEVAL_QUERY',provider or embedding.Gemini(settings),heartbeat=budget.check if budget else lambda:None)[0]
+                'RETRIEVAL_QUERY',provider or (budget.embedding_provider(settings,config['embedding']) if budget else embedding.provider_for(settings,config['embedding'])),
+                heartbeat=budget.check if budget else lambda:None)[0]
         except DomainError as exc:
             warnings.append(dict(code=exc.code,component='dense'));mode='lexical'
     elif request.mode=='lexical':mode='lexical'

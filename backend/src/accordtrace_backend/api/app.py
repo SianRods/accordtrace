@@ -99,7 +99,8 @@ def create_app(settings: Settings|None=None):
                 pointer=db.get(ActiveSnapshot,1)
                 active_id=pointer.snapshot_id if pointer else None
                 active=db.get(Snapshot,active_id) if active_id else None
-                search_ready=bool(active and active.search_ready)
+                from accordtrace_backend.indexing.embedding import mode_matches
+                search_ready=bool(active and active.search_ready and mode_matches(settings,active.configuration.get('embedding',{})))
             checks['postgres']='ready'
         except Exception: checks['postgres']='unavailable'
         try:
@@ -118,7 +119,8 @@ def create_app(settings: Settings|None=None):
         chat_ready=bool(ok and search_ready and checkpoints_ready(db_engine) and chat_configured(settings))
         return JSONResponse(status_code=200 if ok else 503,content=dict(
             status='ready' if ok else 'unavailable',dependencies=checks,graph_ready=graph_ready,
-            search_ready=search_ready and ok,chat_ready=chat_ready,active_snapshot_id=active_id))
+            search_ready=search_ready and ok,chat_ready=chat_ready,active_snapshot_id=active_id,
+            offline_mode=settings.offline_mode))
 
     protection=[Depends(auth)]
 

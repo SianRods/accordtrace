@@ -142,3 +142,12 @@ See [uv locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/).
 Commit source code, `pyproject.toml`, `uv.lock`, and `.python-version`. Generated data,
 local environments, caches, credentials, build outputs, and runtime files are excluded
 through `.gitignore`.
+
+
+### Current backend model setup
+
+All chat roles run on Groq: GPT-OSS 20B plans and drafts/revises; GPT-OSS 120B
+reviews. Local Ollama EmbeddingGemma generates embeddings. Gemini and its SDK/key
+requirements have been removed. OFFLINE_MODE must remain true (local embeddings,
+not offline chat). See [frontend handoff](backend/handoffs/frontend_integration_handoff.md)
+and [operations](backend/runbooks/phase_3.md). Existing index data is retained.

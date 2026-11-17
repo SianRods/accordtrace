@@ -37,14 +37,15 @@ def test_strict_schema_selectors_and_scope():
 
 def test_live_gateway_refuses_missing_confirmation_before_network():
     # Explicit overrides keep this test offline even when the operator configures keys.
-    provider=LiveProviders(Settings(groq_api_key='',gemini_api_key='',groq_free_tier_confirmed=False,gemini_free_tier_confirmed=False))
+    provider=LiveProviders(Settings(groq_api_key='',groq_free_tier_confirmed=False))
     with pytest.raises(ProviderFailure) as error:provider.generate('planner',{},provider_schema(Plan),1,100)
     assert error.value.code=='chat_credentials_not_configured'
     assert retry_delay({'retry-after':'15'})==15
     assert retry_delay({'retry-after':'garbage'})==60
 
 
-def test_groq_adapter_disables_retries_and_reasoning(monkeypatch):
+@pytest.mark.parametrize('role,model',[('planner','openai/gpt-oss-20b'),('draft','openai/gpt-oss-20b'),('reviewer','openai/gpt-oss-120b')])
+def test_groq_adapter_disables_retries_and_reasoning(monkeypatch,role,model):
     from pydantic import SecretStr
     import groq
     seen={}
@@ -56,10 +57,10 @@ def test_groq_adapter_disables_retries_and_reasoning(monkeypatch):
             seen.update(kwargs)
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"standalone_question":"q","tasks":[],"clarification":"Which clause?"}'))],usage=None)
     monkeypatch.setattr(groq,'Groq',Client)
-    settings=Settings(groq_api_key=SecretStr('fixture'),gemini_api_key=SecretStr('fixture'),groq_free_tier_confirmed=True,gemini_free_tier_confirmed=True)
-    value,usage=LiveProviders(settings).generate('planner',{'question':'untrusted'},provider_schema(Plan),2,1536)
+    settings=Settings(groq_api_key=SecretStr('fixture'),groq_free_tier_confirmed=True)
+    value,usage=LiveProviders(settings).generate(role,{'question':'untrusted'},provider_schema(Plan),2,1536)
     assert value['clarification'] and seen['max_retries']==0 and seen['include_reasoning'] is False
-    assert seen['model']=='openai/gpt-oss-20b' and 'tools' not in seen
+    assert seen['model']==model and 'tools' not in seen
 
 
 def test_provider_payload_fits_quota_without_losing_draft_citations():
@@ -74,3 +75,32 @@ def test_provider_payload_fits_quota_without_losing_draft_citations():
     assert limited['omitted_evidence_ids'] and len(payload['evidence'])==12
     assert all('source_hash' not in item for item in fitted['evidence'])
     with pytest.raises(Halt,match='provider_context_budget'):fit_payload('reviewer',payload,schema,1536,100)
+
+
+def test_groq_json_validation_error_uses_bounded_schema_repair(monkeypatch):
+    import groq,httpx
+    class Client:
+        def __init__(self,**kwargs):self.chat=SimpleNamespace(completions=self)
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def create(self,**kwargs):
+            raise groq.BadRequestError('fixture',response=httpx.Response(400,request=httpx.Request('POST','https://api.groq.com/openai/v1/chat/completions')),
+                body={'error':{'code':'json_validate_failed','failed_generation':'never expose this field'}})
+    monkeypatch.setattr(groq,'Groq',Client)
+    settings=Settings(groq_api_key='fixture',groq_free_tier_confirmed=True)
+    with pytest.raises(ProviderFailure) as error:LiveProviders(settings).generate('planner',{},provider_schema(Plan),2,1536)
+    assert error.value.code=='structured_output_invalid'
+
+
+def test_groq_only_credentials_and_removed_settings():
+    from accordtrace_backend.chat.providers import configured, _limits
+    from accordtrace_backend.chat.prompts import MODELS, configuration
+    assert configured(Settings(groq_api_key='fixture',groq_free_tier_confirmed=True))
+    assert not configured(Settings(groq_api_key='fixture',groq_free_tier_confirmed=False))
+    assert {provider for provider,model in MODELS.values()}=={'groq'}
+    assert MODELS['planner']==MODELS['draft']
+    assert all('gemini' not in name for name in Settings.model_fields)
+    assert set(configuration(Settings())['quotas'])=={'groq_rpm','groq_tpm','groq_rpd','groq_tpd'}
+    with pytest.raises(ProviderFailure) as error:
+        _limits(Settings(),'unknown')
+    assert error.value.code=='unsupported_chat_provider'

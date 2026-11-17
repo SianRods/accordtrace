@@ -24,16 +24,14 @@ class Budget:
             if run.counters['graph_units']>=12:return False
             reserve(run,'graph_units');db.add(Artifact(run_id=run.id,key=key,input_hash=target,value={}))
             return True
-
-
-class QueryEmbedder(embedding.Gemini):
-    """Subclass preserves Phase 2's cross-process Gemini advisory lock."""
-    def __init__(self,settings,budget):super().__init__(settings);self.budget=budget
-    def embed(self,inputs,task):
-        with Session(self.budget.engine) as db,db.begin():
-            run=owned(db,self.budget.run_id,self.budget.token);reserve(run,'embedding')
-            self.query_timeout_seconds=min(5,run.configuration['active_seconds']-run.active_seconds)
-        return super().embed(inputs,task)
+    def embedding_provider(self,settings,profile):
+        provider=embedding.provider_for(settings,profile)
+        def before_call():
+            with Session(self.engine) as db,db.begin():
+                run=owned(db,self.run_id,self.token);reserve(run,'embedding')
+                provider.query_timeout_seconds=min(5,run.configuration['active_seconds']-run.active_seconds)
+        provider.before_call=before_call
+        return provider
 
 
 def hydrate(db,conversation,row):
@@ -53,7 +51,7 @@ class Tools:
     def __init__(self,settings,engine,run_id,token,embedding_provider=None):
         self.settings,self.engine,self.run_id,self.token=settings,engine,run_id,token
         self.budget=Budget(engine,run_id,token)
-        self.provider=embedding_provider or QueryEmbedder(settings,self.budget)
+        self.provider=embedding_provider
     def context(self):
         with Session(self.engine) as db,db.begin():
             run=owned(db,self.run_id,self.token);convo=db.get(Conversation,run.conversation_id)

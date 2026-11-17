@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from accordtrace_backend.indexing.chunking import fingerprint
 from accordtrace_backend.common.core import DomainError
-from accordtrace_backend.persistence.storage import Document
+from accordtrace_backend.persistence.storage import Document,Span
 from accordtrace_backend.chat.evidence import Tools, verify_claims
 from accordtrace_backend.chat.models import Artifact, Conversation, Run
 from accordtrace_backend.chat.providers import Gateway, configured
@@ -42,8 +42,10 @@ class Workflow:
                     validated=[]
                     for citation in claim['citations']:
                         doc=db.get(Document,citation['document_version_id'])
-                        if doc and doc.id in convo.documents and doc.text[citation['start']:citation['end']]==citation['quote']:
-                            validated.append(dict(document_version_id=doc.id,start=citation['start'],end=citation['end']))
+                        span=db.get(Span,citation['span_id'])
+                        if doc and span and span.document_id==doc.id and doc.id in convo.documents and span.start<=citation['start']<citation['end']<=span.end and doc.text[citation['start']:citation['end']]==citation['quote']:
+                            validated.append(dict(document_version_id=doc.id,agreement_id=doc.agreement_id,
+                                section_label=span.label,start=citation['start'],end=citation['end']))
                     claim['citations']=validated
     def save(self,key,value):
         put_artifact(self.engine,self.run_id,self.token,'workflow:'+key,fingerprint(key),value)

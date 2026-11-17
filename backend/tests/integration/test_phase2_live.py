@@ -34,7 +34,7 @@ pytestmark=[pytest.mark.integration,pytest.mark.skipif(os.environ.get('ACCORDTRA
 
 
 class FakeEmbeddings:
-    """Hash features exercise vector mechanics without claiming Gemini semantics."""
+    """Hash features exercise vector mechanics without claiming real model semantics."""
     def __init__(self):self.completed=[];self.calls=0
     def embed(self,inputs,task):
         self.calls+=1

@@ -43,6 +43,11 @@ class Scripted:
     def __init__(self,mode='normal'):self.mode=mode;self.calls=[];self.once=False
     def generate(self,role,payload,schema,timeout,max_output):
         self.calls.append((role,payload))
+        if self.mode=='malformed_quota' and role=='draft':
+            count=sum(1 for name,_ in self.calls if name=='draft')
+            if count==1:return {'bad':'json'},{}
+            if count==2:raise ProviderFailure('provider_quota',quota=True,retry_after=1)
+            assert payload.get('schema_repair'),'Schema-repair hint must survive quota resume'
         if self.mode in ('quota','crash','malformed','outage') and role=='draft' and not self.once:
             self.once=True
             if self.mode=='quota':raise ProviderFailure('provider_quota',quota=True,retry_after=1)
@@ -74,8 +79,8 @@ def services():
     if base is None or base.status!='graph_ready':
         job=ingestion.enqueue(settings,db_engine,'phase3-source-'+str(uuid.uuid4()))
         ingestion.process(settings,db_engine,ingestion.claim(db_engine,120))
-    config=embedding.configuration(settings,'mock');config['test_namespace']='phase3-v1'
-    job=indexing.register_build(db_engine,'phase3-build-v1',base_id,config)
+    config=embedding.configuration(settings,'mock');config['test_namespace']='phase3-v2-synthetic-profile'
+    job=indexing.register_build(db_engine,'phase3-build-v2-synthetic-profile',base_id,config)
     with Session(db_engine) as db:ready=db.get(Snapshot,job.snapshot_id).search_ready
     provider=FakeEmbeddings()
     if not ready:indexing.process_index(settings,db_engine,ingestion.claim(db_engine,120),provider)
@@ -152,9 +157,10 @@ def test_exact_followup_api_sse_exports_and_idempotency(services):
     follow=submit(settings,db,'local',convo.id,body,str(uuid.uuid4()),configuration(settings,True));script=Scripted()
     done=execute(services,follow,script)
     assert script.calls[0][1]['history'] and done.result['scope']['snapshot_id']==sid
+    assert script.calls[0][1]['history'][0]['claims'][0]['citations'][0]['agreement_id']=='contract_0'
 
 
-@pytest.mark.parametrize('mode',['quota','crash'])
+@pytest.mark.parametrize('mode',['quota','crash','malformed_quota'])
 def test_quota_and_crash_resume_keep_budgets_and_single_answer(services,mode):
     settings,db,sid,embed=services;convo,run,provider=start(services,mode)
     if mode=='crash':
@@ -363,3 +369,25 @@ def test_context_and_graph_budgets_survive_tool_instances(services):
     _,tokenizer=embedding.assets(settings,config['assets'])
     assert sum(len(tokenizer.encode(e['quote'],add_special_tokens=False).ids) for e in tools.context())<=3000
     cancel(db,'local',run.id);process(settings,db,claimed,provider,embed)
+
+
+def test_planner_and_draft_share_model_quota(services):
+    from accordtrace_backend.chat.models import ProviderWindow
+    from accordtrace_backend.chat.prompts import MODELS
+    from accordtrace_backend.chat.providers import quota_reserve
+    from accordtrace_backend.chat.repository import QuotaWait
+    settings,db_engine,*_=services
+    settings=settings.model_copy(update={'chat_groq_tpm':100})
+    assert MODELS['planner']==MODELS['draft']
+    provider,model=MODELS['planner'];now=utcnow()
+    with Session(db_engine) as db:
+        with db.begin():
+            row=db.get(ProviderWindow,provider+':'+model)
+            if row:
+                row.minute_start=now;row.day_start=now;row.requests=0;row.tokens=0
+                row.day_requests=0;row.day_tokens=0;row.blocked_until=None
+                db.flush()
+            quota_reserve(db,settings,provider,model,60)
+            with pytest.raises(QuotaWait):quota_reserve(db,settings,*MODELS['draft'],60)
+            assert db.get(ProviderWindow,provider+':'+model).requests==1
+            db.rollback()  # Keep unrelated test accounting unchanged.

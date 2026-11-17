@@ -24,7 +24,7 @@ def install(app,settings,engine,auth):
     prefix='/api/v1'
     @app.post(prefix+'/conversations',status_code=201)
     def create(body:CreateConversation,owner=Depends(auth)):
-        return conversation_view(create_conversation(engine,owner,body))
+        return conversation_view(create_conversation(engine,owner,body,settings=settings))
     @app.get(prefix+'/conversations')
     def conversations(owner=Depends(auth),offset:int=Query(0,ge=0),limit:int=Query(20,ge=1,le=100)):
         with Session(engine) as db:

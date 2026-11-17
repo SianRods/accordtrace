@@ -43,9 +43,12 @@ def event(db,run,key,kind,payload):
     db.add(Event(run_id=run.id,sequence=run.event_sequence,key=key,kind=kind,payload=payload))
 
 
-def create_conversation(db_engine,owner,body,allow_mock=False):
+def create_conversation(db_engine,owner,body,allow_mock=False,settings=None):
     with Session(db_engine,expire_on_commit=False) as db,db.begin():
         snapshot=pin(db,body.snapshot_id)
+        if settings:
+            from accordtrace_backend.indexing.embedding import ensure_mode
+            ensure_mode(settings,snapshot.configuration['embedding'])
         if snapshot.configuration['embedding']['verification']!='live' and not allow_mock:
             raise DomainError('mock_snapshot_not_for_chat')
         docs=[d for d in snapshot_documents(db,snapshot.id) if d.agreement_id in body.agreement_ids]
@@ -62,6 +65,9 @@ def submit(settings,db_engine,owner,conversation_id,body,key,configuration):
     request=body.model_dump();input_hash=fingerprint(request)
     with Session(db_engine,expire_on_commit=False) as db,db.begin():
         conversation=authorize(db,conversation_id,owner)
+        from accordtrace_backend.persistence.storage import Snapshot
+        from accordtrace_backend.indexing.embedding import ensure_mode
+        ensure_mode(settings,db.get(Snapshot,conversation.snapshot_id).configuration['embedding'])
         db.refresh(conversation,with_for_update=True)
         old=db.scalar(select(Run).where(Run.conversation_id==conversation_id,Run.idempotency_key==key))
         if old:

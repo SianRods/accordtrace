@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from accordtrace_backend.indexing.chunking import fingerprint
 from accordtrace_backend.common.core import DomainError
 from accordtrace_backend.persistence.storage import utcnow
-from accordtrace_backend.chat.models import ModelCall, ProviderWindow, Run
+from accordtrace_backend.chat.models import Artifact, ModelCall, ProviderWindow, Run
 from accordtrace_backend.chat.prompts import MODELS, PROMPTS, configuration
 from accordtrace_backend.chat.repository import Halt, QuotaWait, event, get_artifact, owned, put_artifact, reserve
 from accordtrace_backend.chat.schemas import provider_schema
@@ -26,8 +26,7 @@ class ProviderFailure(Exception):
 
 
 def configured(settings):
-    return bool(settings.gemini_api_key.get_secret_value() and settings.gemini_free_tier_confirmed
-                and settings.groq_api_key.get_secret_value() and settings.groq_free_tier_confirmed)
+    return bool(settings.groq_api_key.get_secret_value() and settings.groq_free_tier_confirmed)
 
 
 def retry_delay(headers):
@@ -46,32 +45,26 @@ class LiveProviders:
         provider,model=MODELS[role]
         if not configured(self.settings):raise ProviderFailure('chat_credentials_not_configured')
         try:
-            if provider=='groq':
-                from groq import Groq
-                with Groq(api_key=self.settings.groq_api_key.get_secret_value(),timeout=timeout,max_retries=0) as client:
-                    response=client.chat.completions.create(model=model,stream=False,
-                        messages=[{'role':'system','content':PROMPTS[role]},
-                                  {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
-                        reasoning_effort='low',include_reasoning=False,max_completion_tokens=max_output,
-                        response_format={'type':'json_schema','json_schema':dict(name=role,strict=True,schema=schema)})
-                if not response.choices or not response.choices[0].message.content:raise ProviderFailure('empty_model_response')
-                usage=response.usage.model_dump() if response.usage else {}
-                return json.loads(response.choices[0].message.content),usage
-            from google import genai
-            from google.genai import types
-            with genai.Client(api_key=self.settings.gemini_api_key.get_secret_value(),
-                http_options=types.HttpOptions(timeout=int(timeout*1000),retry_options=types.HttpRetryOptions(attempts=1))) as client:
-                response=client.models.generate_content(model=model,contents=json.dumps(payload,ensure_ascii=False),
-                    config=types.GenerateContentConfig(system_instruction=PROMPTS[role],response_mime_type='application/json',
-                        response_json_schema=schema,max_output_tokens=max_output,
-                        thinking_config=types.ThinkingConfig(thinking_level='minimal',include_thoughts=False)))
-            if not response.text:raise ProviderFailure('empty_model_response')
-            usage=response.usage_metadata.model_dump() if response.usage_metadata else {}
-            return json.loads(response.text),usage
+            if provider!='groq':raise ProviderFailure('unsupported_chat_provider')
+            from groq import Groq
+            with Groq(api_key=self.settings.groq_api_key.get_secret_value(),timeout=timeout,max_retries=0) as client:
+                response=client.chat.completions.create(model=model,stream=False,
+                    messages=[{'role':'system','content':PROMPTS[role]},
+                              {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
+                    reasoning_effort='low',include_reasoning=False,max_completion_tokens=max_output,
+                    response_format={'type':'json_schema','json_schema':dict(name=role,strict=True,schema=schema)})
+            if not response.choices or not response.choices[0].message.content:raise ProviderFailure('empty_model_response')
+            usage=response.usage.model_dump() if response.usage else {}
+            return json.loads(response.choices[0].message.content),usage
         except (json.JSONDecodeError,ProviderFailure):raise
         except Exception as exc:
             response=getattr(exc,'response',None)
             code=getattr(exc,'status_code',None) or getattr(exc,'code',None)
+            body=getattr(exc,'body',{})
+            if isinstance(body,dict):
+                error=body.get('error',body)
+                if code==400 and isinstance(error,dict) and error.get('code')=='json_validate_failed':
+                    raise ProviderFailure('structured_output_invalid') from None
             if code==429:raise ProviderFailure('provider_quota',quota=True,retry_after=retry_delay(getattr(response,'headers',{}))) from None
             if code in (401,403,404):raise ProviderFailure('provider_access_denied') from None
             raise ProviderFailure('provider_unavailable',retryable=code in (None,500,502,503,504)) from None
@@ -79,7 +72,7 @@ class LiveProviders:
 
 def _limits(settings,provider):
     if provider=='groq':return settings.chat_groq_rpm,settings.chat_groq_tpm,settings.chat_groq_rpd,settings.chat_groq_tpd
-    return settings.chat_gemini_rpm,settings.chat_gemini_tpm,settings.chat_gemini_rpd,1000000
+    raise ProviderFailure('unsupported_chat_provider')
 
 
 def request_estimate(role,payload,schema,max_output):
@@ -155,7 +148,7 @@ def quota_result(db,provider,model,estimate,usage,failure=None):
             if window.failures>=3:window.blocked_until=utcnow()+timedelta(seconds=60)
         return
     window.failures=0
-    actual=usage.get('total_tokens') or usage.get('total_token_count')
+    actual=usage.get('total_tokens')
     if isinstance(actual,int):
         window.tokens=max(0,window.tokens+actual-estimate);window.day_tokens=max(0,window.day_tokens+actual-estimate)
 
@@ -172,7 +165,8 @@ class Gateway:
         input_hash=fingerprint(dict(role=role,payload=payload,schema=schema,prompt=PROMPTS[role]))
         cached=get_artifact(self.engine,self.run_id,'model:'+step,input_hash)
         if cached is not None:return model_type.model_validate(cached)
-        repair=False;network_retry=False
+        repair=bool(get_artifact(self.engine,self.run_id,'schema_repair:'+step,input_hash))
+        network_retry=bool(get_artifact(self.engine,self.run_id,'network_retry:'+step,input_hash))
         for _ in range(3):
             with Session(self.engine) as db,db.begin():
                 run=owned(db,self.run_id,self.token)
@@ -184,17 +178,18 @@ class Gateway:
                 estimate=request_estimate(role,payload,schema,max_output)
                 if limited['omitted_evidence_ids'] or limited['omitted_history_turns']:
                     event(db,run,'context:'+step,'context_limited',dict(step=step,**limited))
-                    from .models import Artifact
                     db.merge(Artifact(run_id=run.id,key='context:'+step,input_hash=input_hash,value=limited))
                 if not self.providers.scripted:quota_reserve(db,self.settings,provider,model,estimate)
                 reserve(run,'generation')
+                call_payload={**payload,**({'schema_repair':'Return valid JSON for the exact schema.'} if repair else {})}
+                call_hash=fingerprint(dict(role=role,payload=call_payload,schema=schema,prompt=PROMPTS[role]))
                 call=ModelCall(id=str(uuid.uuid4()),run_id=run.id,step=step,attempt=attempt,provider=provider,model=model,
-                    input_hash=input_hash,status='in_flight',timeout=timeout)
+                    input_hash=call_hash,status='in_flight',timeout=timeout)
                 db.add(call);event(db,run,'model:'+step+':'+str(attempt),'provider_started',{'role':role,'model':model,'attempt':attempt})
                 call_id=call.id
             failure=None;usage={};parsed=None
             try:
-                value,usage=self.providers.generate(role,{**payload,**({'schema_repair':'Return valid JSON for the exact schema.'} if repair else {})},schema,timeout,max_output)
+                value,usage=self.providers.generate(role,call_payload,schema,timeout,max_output)
                 parsed=model_type.model_validate(value)
             except (ValidationError,json.JSONDecodeError):failure=ProviderFailure('structured_output_invalid')
             except ProviderFailure as exc:failure=exc
@@ -209,9 +204,12 @@ class Gateway:
                 return parsed
             if failure.quota:raise QuotaWait(utcnow()+timedelta(seconds=failure.retry_after))
             if failure.code=='structured_output_invalid' and not repair:
-                with Session(self.engine) as db,db.begin():reserve(owned(db,self.run_id,self.token),'schema_repair')
+                with Session(self.engine) as db,db.begin():
+                    reserve(owned(db,self.run_id,self.token),'schema_repair')
+                    db.add(Artifact(run_id=self.run_id,key='schema_repair:'+step,input_hash=input_hash,value={'reserved':True}))
                 repair=True;continue
             if failure.retryable and not network_retry:
+                put_artifact(self.engine,self.run_id,self.token,'network_retry:'+step,input_hash,{'reserved':True})
                 network_retry=True;continue
             raise Halt(failure.code)
         raise Halt('model_step_attempt_limit')

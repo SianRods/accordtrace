@@ -114,7 +114,7 @@ def process_index(settings,db_engine,claimed,provider=None):
             parents={p.id:p for p in db.scalars(select(Span).where(Span.document_id.in_(docs_by_id),Span.parser_version==config['parser']))}
         profile=config['embedding']
         if provider is not None and profile['verification']!='mock':raise DomainError('mock_provider_requires_mock_profile')
-        provider=provider or embedding.Gemini(settings)
+        provider=provider or embedding.provider_for(settings,profile)
         sparse=embedding.sparse_model(settings,manifest=config['assets'])
         name=vectorstore.collection_name(sid)
         with vectorstore.client(settings) as conn:
@@ -218,6 +218,7 @@ def activate(settings,db_engine,sid,expected_generation,allow_mock=False):
         if candidate is None or not candidate.search_ready:raise DomainError('snapshot_not_search_ready')
         if candidate.configuration['embedding']['verification']!='live' and not allow_mock:
             raise DomainError('mock_snapshot_cannot_activate')
+        embedding.ensure_mode(settings,candidate.configuration['embedding'])
     validate(settings,db_engine,sid)
     with Session(db_engine) as db,db.begin():
         pointer=db.get(ActiveSnapshot,1,with_for_update=True)

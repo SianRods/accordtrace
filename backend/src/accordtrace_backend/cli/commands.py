@@ -63,11 +63,12 @@ def main():
             from accordtrace_backend.indexing.embedding import prepare_assets
             print(json.dumps(prepare_assets(settings),indent=2))
         elif args.command=='embedding-preflight':
-            from accordtrace_backend.indexing.embedding import Gemini
-            provider=Gemini(settings)
+            from accordtrace_backend.indexing.embedding import configuration,provider_for
+            profile=configuration(settings)['embedding'];provider=provider_for(settings,profile)
             vectors=provider.embed(['Public merger agreement evidence.'],'RETRIEVAL_DOCUMENT')
             query=provider.embed(['merger agreement'],'RETRIEVAL_QUERY')
-            print(json.dumps(dict(model='gemini-embedding-001',dimensions=len(vectors[0]),query_dimensions=len(query[0]),verification='live')))
+            print(json.dumps(dict(provider=profile['provider'],model=profile['model'],model_digest=profile.get('model_digest'),
+                dimensions=len(vectors[0]),query_dimensions=len(query[0]),verification='live')))
         elif args.command=='index-enqueue':
             from accordtrace_backend.indexing.pipeline import enqueue_index
             from accordtrace_backend.indexing.updates import enqueue_manifest

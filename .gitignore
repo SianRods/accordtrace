@@ -85,3 +85,6 @@ Desktop.ini
 
 # Backend plans, instructions, runbooks, and handoffs are project deliverables.
 /backend/**/*.md
+
+# Frontend Markdown files
+/frontend/**/*.md

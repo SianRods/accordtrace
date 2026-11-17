@@ -59,7 +59,8 @@ def main():
             report['direct_run_id']=direct['id'];save()
             assert direct['status']=='completed' and direct['answer_status'] in ('supported','partially_supported')
             assert '115' in direct['result']['answer'] and direct['result']['claims']
-            assert len({m['provider'] for m in trace['models'] if m['status']=='succeeded'})==2
+            assert {m['provider'] for m in trace['models'] if m['status']=='succeeded'}=={'groq'}
+            assert {'plan','draft','review:initial'} <= {m['step'] for m in trace['models'] if m['status']=='succeeded'}
             for claim in direct['result']['claims']:
                 for citation in claim['citations']:
                     span=request('GET','/api/v1/evidence/'+citation['span_id']).json()

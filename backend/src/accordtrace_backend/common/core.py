@@ -3,7 +3,7 @@ import hashlib
 import uuid
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -31,10 +31,12 @@ class Settings(BaseSettings):
     qdrant_url: str = 'http://localhost:6333'
     api_token: SecretStr = SecretStr('')
     lease_seconds: int = Field(120, ge=30, le=3600)
-    gemini_api_key: SecretStr = SecretStr('')
-    gemini_free_tier_confirmed: bool = False
-    embedding_timeout_seconds: int = Field(20, ge=1, le=60)
-    embedding_requests_per_minute: int = Field(5, ge=1)
+    # Compatibility flag: embeddings are now local-only; false fails configuration.
+    offline_mode: bool = True
+    ollama_url: str = 'http://127.0.0.1:11434'
+    ollama_embedding_model: str = 'embeddinggemma:300m'
+    ollama_embedding_timeout_seconds: int = Field(60,ge=1,le=180)
+    ollama_keep_alive: str = '30m'
     approved_manifests: tuple[str, ...] = ()
     approved_manifest_dir: Path|None = None
     groq_api_key: SecretStr = SecretStr('')
@@ -47,9 +49,12 @@ class Settings(BaseSettings):
     chat_groq_tpm: int = Field(8000,ge=1)
     chat_groq_rpd: int = Field(1000,ge=1)
     chat_groq_tpd: int = Field(200000,ge=1)
-    chat_gemini_rpm: int = Field(5,ge=1)
-    chat_gemini_tpm: int = Field(6000,ge=1)
-    chat_gemini_rpd: int = Field(100,ge=1)
+
+    @field_validator('offline_mode')
+    @classmethod
+    def require_local_embeddings(cls,value):
+        if not value:raise ValueError('Embeddings are local-only; offline_mode must be true')
+        return value
 
     @property
     def runtime(self) -> Path:
