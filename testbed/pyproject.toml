@@ -1,0 +1,40 @@
+[project]
+name = "accordtrace-testbed"
+version = "0.1.0"
+description = "Independent HTTP evaluation client for the AccordTrace backend."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "httpx>=0.28,<1",
+    "pydantic-settings>=2.7,<3",
+    "reportlab>=4.4,<5",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+accordtrace-testbed = "accordtrace_testbed.cli:main"
+
+[project.optional-dependencies]
+judge = [
+    "google-genai>=3.3,<4",
+    "ragas>=0.4,<0.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/accordtrace_testbed"]
+
+[tool.uv]
+cache-dir = ".cache/uv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.runtime/pytest"
+
+[dependency-groups]
+dev = [
+    "pypdf>=6,<7",
+    "pypdfium2>=5,<6",
+    "pytest>=8,<10",
+]

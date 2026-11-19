@@ -1,0 +1,26 @@
+{
+  "title": "AccordTrace Evaluation",
+  "subtitle": "M&A evidence copilot | Independent testbed",
+  "accent_color": "#176B72",
+  "footer": "AccordTrace | Evaluation evidence, not a legal accuracy certification",
+  "metrics": {
+    "annotated_span_coverage_all": {"interpretation": "Fraction of labelled source code points covered by the full captured evidence packet, unioning overlaps. Partial coverage does not establish complete legal support."},
+    "annotated_span_coverage_at_3": {"interpretation": "Labelled source code-point coverage within the first three excerpts, unioning overlaps."},
+    "annotated_span_coverage_at_6": {"interpretation": "Labelled source code-point coverage within the first six excerpts, unioning overlaps."},
+    "evidence_recall_at_3": {"interpretation": "Fraction of labelled evidence units at least 95% covered within three excerpts. A source-overlap threshold, not a legal completeness judgement."},
+    "answer_emission_rate": {"interpretation": "Fraction of eligible answerable cases with emitted claims. Measures answer production, not correctness; service failures are excluded."},
+    "chat_scope_valid": {"interpretation": "Fraction of captured chat scopes matching the pinned conversation scope. Mechanical access/snapshot consistency."},
+    "citation_count": {"interpretation": "Mean number of citations in captured answers. A count with no assumed optimal direction."},
+    "returned_evidence_count": {"interpretation": "Mean number of returned evidence items. Larger packets are not necessarily better retrieval."},
+    "evidence_recall_at_6": {"label": "Evidence recall @6", "interpretation": "Fraction of labelled evidence units at least 95% covered within six excerpts. Higher is better; source-label coverage does not prove legal completeness."},
+    "mrr": {"label": "Reciprocal rank", "interpretation": "Rank of the first excerpt with at least 50% overlap of a labelled evidence unit. Undefined for cross-agreement ranking."},
+    "citation_integrity": {"interpretation": "Mechanical validation of citation scope, source identity, hashes, offsets and exact quotes. Does not establish that a claim follows from its citation."},
+    "ragas_citation_groundedness_proxy": {"interpretation": "Judge support against final cited quotes only. This is not faithfulness against the actual generation context."},
+    "ragas_context_recall": {"interpretation": "Judge-estimated support of reference claims by the captured search context. Separate search results are not necessarily generation context."},
+    "ragas_context_precision": {"interpretation": "Judge-estimated relevance and ordering of retrieved contexts against the reference. Not available for a global rank across agreement groups."},
+    "ragas_response_relevancy": {"interpretation": "Question/answer relevance using Gemini judgement and local Ollama embedding similarity. Relevance is not factual correctness."},
+    "ragas_factual_correctness": {"interpretation": "Judge comparison of answer claims against the reference. Limited by reference completeness and judge reliability."},
+    "false_abstention_rate": {"interpretation": "Lower is better. Fraction of eligible answerable cases receiving insufficient-evidence abstention; operational failures are excluded."},
+    "scope_violation_count": {"interpretation": "Lower is better. Count of returned evidence items outside the requested agreement scope."}
+  }
+}
